@@ -47,3 +47,10 @@ export function canAccessProject(
 
   return (permissions[role] ?? []).includes(action);
 }
+
+export function canManageProjectIntegration(
+  project: Pick<Project, "ownerId" | "members">,
+  userId: string | null | undefined,
+) {
+  return ["owner", "admin"].includes(resolveProjectRole(project, userId) || "");
+}

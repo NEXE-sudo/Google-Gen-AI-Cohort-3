@@ -1,8 +1,6 @@
 import {
-  buildIncidentDocument,
   buildProjectDocument,
   normalizeProjectInput,
-  type IncidentDraft,
   type ProjectDraft,
 } from "./projectPersistence";
 import { canAccessProject, type Project } from "./projects";
@@ -18,34 +16,6 @@ export type ProjectRecordLike = Pick<
   | "createdAt"
   | "updatedAt"
 >;
-
-export interface ServiceIncidentRecord {
-  id: string;
-  projectId: string;
-  ownerId: string;
-  title: string;
-  severity: "Low" | "Medium" | "High" | "Critical";
-  status: "Open" | "Investigating" | "Mitigated" | "Resolved";
-  summary: string;
-  source: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-const inMemoryIncidentStore: ServiceIncidentRecord[] = [
-  {
-    id: "incident_seed_1",
-    projectId: "proj_trace_demo",
-    ownerId: "marcus",
-    title: "Authentication context lost after middleware reorder",
-    severity: "High",
-    status: "Investigating",
-    summary: "Middleware ordering changed before request context extraction.",
-    source: "payments-auth-integration",
-    createdAt: "2026-09-06T10:24:00.000Z",
-    updatedAt: "2026-09-06T10:24:00.000Z",
-  },
-];
 
 export function listVisibleProjectsForUser(
   projects: ProjectRecordLike[],
@@ -83,36 +53,4 @@ export function createProjectForUser(
   } catch {
     return null;
   }
-}
-
-export function listProjectIncidentsForUser(
-  project: ProjectRecordLike,
-  userId: string | null | undefined,
-): ServiceIncidentRecord[] {
-  if (!userId || !canAccessProject(project, userId, "read")) {
-    return [];
-  }
-
-  return inMemoryIncidentStore.filter(
-    (incident) => incident.projectId === project.id,
-  );
-}
-
-export function createProjectIncidentForUser(
-  project: ProjectRecordLike,
-  userId: string | null | undefined,
-  input: IncidentDraft,
-): ServiceIncidentRecord | null {
-  if (!userId || !canAccessProject(project, userId, "create")) {
-    return null;
-  }
-
-  const incident = buildIncidentDocument(project.id, userId, input);
-  const record: ServiceIncidentRecord = {
-    ...incident,
-    severity: incident.severity,
-  };
-
-  inMemoryIncidentStore.push(record);
-  return record;
 }

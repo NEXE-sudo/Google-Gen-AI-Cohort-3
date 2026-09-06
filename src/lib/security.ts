@@ -48,6 +48,20 @@ export function validatePromptInjection(input: string): {
   return { safe: true };
 }
 
+export function detectPromptInjection(input: string): string[] {
+  const value = input || "";
+  const patterns: Array<[string, RegExp]> = [
+    ["ignore_previous_instructions", /ignore (?:all )?previous instructions/i],
+    ["override_system_instructions", /override system instructions/i],
+    ["reveal_secrets", /reveal all secrets/i],
+    ["bypass_auth", /bypass auth/i],
+    ["disable_security", /disable security/i],
+  ];
+  return patterns
+    .filter(([, pattern]) => pattern.test(value))
+    .map(([name]) => name);
+}
+
 export function canPerformAction(
   role: Role,
   action: "read" | "create" | "update" | "delete",

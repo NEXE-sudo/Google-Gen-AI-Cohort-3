@@ -95,7 +95,7 @@ type LiveIncident = {
 type LiveMemory = {
   id: string;
   problem: string;
-  cause: string;
+  rootCause: string;
   resolution: string;
   summary: string;
 };
@@ -124,6 +124,9 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
   const [liveError, setLiveError] = useState<string | null>(null);
   const [projectName, setProjectName] = useState("");
   const [projectRepository, setProjectRepository] = useState("");
+  const [assistantQuestion, setAssistantQuestion] = useState("");
+  const [assistantAnswer, setAssistantAnswer] = useState<string | null>(null);
+  const [assistantLoading, setAssistantLoading] = useState(false);
   const isDemoMode = import.meta.env.VITE_DEMO_MODE === "true";
 
   useEffect(() => {
@@ -199,7 +202,7 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
     ? demoMemory
     : liveMemory.map((entry) => ({
         problem: entry.problem,
-        rootCause: entry.cause,
+        rootCause: entry.rootCause,
         resolution: entry.resolution,
         lesson: entry.summary,
       }));
@@ -368,6 +371,45 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
           ? error.message
           : "Repository synchronization failed.",
       );
+    }
+  };
+
+  const handleAskAssistant = async (question: string) => {
+    if (isDemoMode) {
+      setAssistantAnswer(
+        "Demo mode uses synthetic project context. Switch to live mode for an authorised project-grounded answer.",
+      );
+      return;
+    }
+    if (!activeProject || !question.trim()) return;
+    setAssistantLoading(true);
+    setAssistantAnswer(null);
+    try {
+      const token = await currentUser.getIdToken();
+      const response = await fetch(
+        `/api/projects/${activeProject.id}/assistant`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ question: question.trim() }),
+        },
+      );
+      const payload = (await response.json()) as {
+        answer?: string;
+        error?: string;
+      };
+      if (!response.ok)
+        throw new Error(payload.error || "Assistant request failed.");
+      setAssistantAnswer(payload.answer || "The assistant returned no answer.");
+    } catch (error) {
+      setAssistantAnswer(
+        error instanceof Error ? error.message : "Assistant request failed.",
+      );
+    } finally {
+      setAssistantLoading(false);
     }
   };
 
@@ -828,15 +870,44 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                   </span>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-sm text-slate-300">
-                  “Likely root cause: authentication middleware introduced in
-                  commit d1c9f2a changed the expected request context. Three
-                  integration tests were skipped in PR #418. The first failing
-                  workflow occurred 11 minutes after the merge.”
+                  {isDemoMode
+                    ? "Likely root cause: authentication middleware introduced in commit d1c9f2a changed the expected request context. Three integration tests were skipped in PR #418. The first failing workflow occurred 11 minutes after the merge."
+                    : assistantAnswer ||
+                      "Ask about this authorised project's incidents, workflow evidence, or engineering memory."}
                 </div>
+                {!isDemoMode && (
+                  <form
+                    className="mt-4 flex gap-2"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void handleAskAssistant(assistantQuestion);
+                    }}
+                  >
+                    <input
+                      value={assistantQuestion}
+                      onChange={(event) =>
+                        setAssistantQuestion(event.target.value)
+                      }
+                      placeholder="Ask about this project..."
+                      className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+                    />
+                    <button
+                      type="submit"
+                      disabled={assistantLoading}
+                      className="rounded-xl bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950 disabled:opacity-60"
+                    >
+                      {assistantLoading ? "Asking..." : "Ask"}
+                    </button>
+                  </form>
+                )}
                 <div className="mt-4 space-y-2">
                   {demoAssistantPromptSuggestions.map((prompt) => (
                     <button
                       key={prompt}
+                      onClick={() => {
+                        setAssistantQuestion(prompt);
+                        void handleAskAssistant(prompt);
+                      }}
                       className="block w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-left text-sm text-slate-200 hover:border-cyan-400/40 hover:bg-slate-900"
                     >
                       {prompt}

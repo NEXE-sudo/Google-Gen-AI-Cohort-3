@@ -2,12 +2,15 @@ import { FieldValue } from "firebase-admin/firestore";
 import { getFirebaseAdminDb } from "./firebaseAdmin";
 import {
   canAccessProject,
+  canManageProjectIntegration,
   resolveProjectRole,
   type Project,
   type ProjectMemberRole,
   type ProjectPermission,
 } from "../lib/projects";
 import type { IncidentSeverity, IncidentStatus } from "../lib/projectStore";
+import { parseGitHubRepository } from "../lib/github";
+import { redactSecrets } from "../lib/security";
 
 export interface PersistedIncident {
   id: string;
@@ -18,6 +21,14 @@ export interface PersistedIncident {
   status: IncidentStatus;
   summary: string;
   source: string;
+  rootCause?: string;
+  confidence?: "High" | "Medium" | "Low";
+  evidence?: string[];
+  affectedComponents?: string[];
+  relatedCommits?: string[];
+  relatedPullRequests?: string[];
+  recommendedActions?: string[];
+  actualResolution?: string;
   createdAt: string;
   updatedAt: string;
   resolvedAt?: string;
@@ -56,7 +67,15 @@ export async function createProject(args: {
   ownerId: string;
 }) {
   const name = args.name.trim();
-  const repository = args.repository.trim();
+  let repository: string;
+  try {
+    const parsedRepository = parseGitHubRepository(args.repository);
+    repository = `${parsedRepository.owner}/${parsedRepository.repo}`;
+  } catch {
+    throw new Error(
+      "A valid GitHub repository in owner/name format is required.",
+    );
+  }
   if (!name || !repository)
     throw new Error("Project name and repository are required.");
 
@@ -123,6 +142,13 @@ export async function createIncident(args: {
   severity: IncidentSeverity;
   summary: string;
   source: string;
+  rootCause?: string;
+  confidence?: "High" | "Medium" | "Low";
+  evidence?: string[];
+  affectedComponents?: string[];
+  relatedCommits?: string[];
+  relatedPullRequests?: string[];
+  recommendedActions?: string[];
 }) {
   const reference = projectCollection()
     .doc(args.projectId)
@@ -138,6 +164,13 @@ export async function createIncident(args: {
     status: "Open",
     summary: args.summary.trim(),
     source: args.source.trim() || "manual",
+    rootCause: args.rootCause?.trim() || undefined,
+    confidence: args.confidence,
+    evidence: args.evidence?.slice(0, 20),
+    affectedComponents: args.affectedComponents?.slice(0, 20),
+    relatedCommits: args.relatedCommits?.slice(0, 20),
+    relatedPullRequests: args.relatedPullRequests?.slice(0, 20),
+    recommendedActions: args.recommendedActions?.slice(0, 20),
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -179,6 +212,8 @@ export async function updateIncident(args: {
   severity?: IncidentSeverity;
   title?: string;
   summary?: string;
+  actualResolution?: string;
+  resolvedBy?: string;
 }) {
   const reference = projectCollection()
     .doc(args.projectId)
@@ -186,18 +221,49 @@ export async function updateIncident(args: {
     .doc(args.incidentId);
   const existing = await reference.get();
   if (!existing.exists) return null;
+  const current = existing.data() as PersistedIncident;
+  const validStatuses: IncidentStatus[] = [
+    "Open",
+    "Investigating",
+    "Mitigated",
+    "Resolved",
+  ];
+  if (args.status && !validStatuses.includes(args.status)) {
+    throw new Error("Incident status is invalid.");
+  }
+  if (
+    args.severity &&
+    !["Low", "Medium", "High", "Critical"].includes(args.severity)
+  ) {
+    throw new Error("Incident severity is invalid.");
+  }
+  const allowedTransitions: Record<IncidentStatus, IncidentStatus[]> = {
+    Open: ["Open", "Investigating", "Mitigated", "Resolved"],
+    Investigating: ["Investigating", "Mitigated", "Resolved"],
+    Mitigated: ["Mitigated", "Investigating", "Resolved"],
+    Resolved: ["Resolved", "Investigating"],
+  };
+  if (
+    args.status &&
+    !allowedTransitions[current.status].includes(args.status)
+  ) {
+    throw new Error("Incident status transition is invalid.");
+  }
 
   const changes: Record<string, unknown> = { updatedAt: now() };
   if (args.status) changes.status = args.status;
   if (args.severity) changes.severity = args.severity;
   if (args.title) changes.title = args.title.trim();
   if (args.summary) changes.summary = args.summary.trim();
+  if (args.actualResolution?.trim())
+    changes.actualResolution = args.actualResolution.trim();
   if (args.status === "Resolved") {
     changes.resolvedAt = now();
+    if (args.resolvedBy) changes.resolvedBy = args.resolvedBy;
   }
   await reference.update(changes);
   return {
-    ...(existing.data() as PersistedIncident),
+    ...current,
     ...changes,
   } as PersistedIncident;
 }
@@ -216,21 +282,22 @@ export async function createMemoryFromIncident(incident: PersistedIncident) {
   const reference = projectCollection()
     .doc(incident.projectId)
     .collection("engineeringMemory")
-    .doc();
+    .doc(incident.id);
   const memory = {
     id: reference.id,
     projectId: incident.projectId,
     sourceIncidentId: incident.id,
     problem: incident.title,
     summary: incident.summary,
-    cause: incident.source,
-    resolution:
-      incident.status === "Resolved"
-        ? incident.summary
-        : "Resolution not recorded.",
+    rootCause: incident.rootCause || "Root cause not recorded.",
+    confidence: incident.confidence || "Low",
+    evidence: incident.evidence || [],
+    resolution: incident.actualResolution || "Resolution not recorded.",
+    prevention: incident.recommendedActions || [],
     createdAt: now(),
+    updatedAt: now(),
   };
-  await reference.set(memory);
+  await reference.set(memory, { merge: true });
   return memory;
 }
 
@@ -247,6 +314,11 @@ export async function writeAuditLog(args: {
     .doc(args.projectId)
     .collection("auditLogs")
     .doc();
+  const metadataText = redactSecrets(JSON.stringify(args.metadata || {}));
+  const boundedMetadata: Record<string, unknown> =
+    metadataText.length <= 4_000
+      ? (JSON.parse(metadataText) as Record<string, unknown>)
+      : { truncated: true, preview: metadataText.slice(0, 3_900) };
   await reference.set({
     id: reference.id,
     projectId: args.projectId,
@@ -255,7 +327,7 @@ export async function writeAuditLog(args: {
     targetType: args.targetType,
     targetId: args.targetId,
     result: args.result,
-    metadata: args.metadata || {},
+    metadata: boundedMetadata,
     createdAt: now(),
   });
 }
@@ -319,12 +391,43 @@ export async function claimWebhookDelivery(args: {
   });
 }
 
+export async function updateWebhookDelivery(
+  deliveryId: string,
+  update: {
+    status: "accepted" | "duplicate" | "rejected" | "failed";
+    projectId?: string;
+  },
+) {
+  await getFirebaseAdminDb()
+    .collection("webhookDeliveries")
+    .doc(deliveryId)
+    .set({ ...update, updatedAt: now() }, { merge: true });
+}
+
 export async function findProjectByRepository(repository: string) {
-  const snapshot = await projectCollection()
-    .where("repository", "==", repository)
-    .limit(1)
-    .get();
-  const document = snapshot.docs[0];
+  let canonicalRepository: string;
+  try {
+    const parsedRepository = parseGitHubRepository(repository);
+    canonicalRepository =
+      `${parsedRepository.owner}/${parsedRepository.repo}`.toLowerCase();
+  } catch {
+    return null;
+  }
+
+  const snapshot = await projectCollection().limit(100).get();
+  const document = snapshot.docs.find((candidate) => {
+    try {
+      const parsedRepository = parseGitHubRepository(
+        String(candidate.data().repository || ""),
+      );
+      return (
+        `${parsedRepository.owner}/${parsedRepository.repo}`.toLowerCase() ===
+        canonicalRepository
+      );
+    } catch {
+      return false;
+    }
+  });
   return document ? asProject(document.id, document.data()) : null;
 }
 

@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   createProjectForUser,
-  createProjectIncidentForUser,
-  listProjectIncidentsForUser,
   listVisibleProjectsForUser,
   type ProjectRecordLike,
 } from "./projectService";
@@ -58,31 +56,6 @@ describe("project service", () => {
         },
         "alice",
       ),
-    ).toBeNull();
-  });
-
-  it("lists and creates project incidents with authorization checks", () => {
-    const incident = createProjectIncidentForUser(projects[0], "marcus", {
-      title: "Request context lost",
-      severity: "High",
-      summary: "The auth middleware changed order.",
-      source: "payments-auth-integration",
-    });
-
-    expect(incident).not.toBeNull();
-    expect(listProjectIncidentsForUser(projects[0], "marcus")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ projectId: "proj_trace_demo" }),
-      ]),
-    );
-
-    expect(
-      createProjectIncidentForUser(projects[0], "priya", {
-        title: "Viewer incident",
-        severity: "Medium",
-        summary: "Should be blocked",
-        source: "manual",
-      }),
     ).toBeNull();
   });
 });

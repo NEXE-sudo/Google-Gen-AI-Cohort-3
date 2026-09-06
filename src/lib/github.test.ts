@@ -40,4 +40,34 @@ describe("GitHub integration boundaries", () => {
     });
     expect(() => verifyGitHubOAuthState(`${state}tampered`)).toThrow();
   });
+
+  it("binds OAuth state to a random nonce and rejects modified payloads", () => {
+    process.env.GITHUB_OAUTH_STATE_SECRET = "test-state-secret";
+    const first = createGitHubOAuthState({
+      projectId: "project-1",
+      uid: "user-1",
+    });
+    const second = createGitHubOAuthState({
+      projectId: "project-1",
+      uid: "user-1",
+    });
+    const firstData = verifyGitHubOAuthState(first);
+    const secondData = verifyGitHubOAuthState(second);
+    expect(firstData.nonce).toMatch(/^[a-f0-9]{64}$/);
+    expect(secondData.nonce).not.toBe(firstData.nonce);
+    const [payload, signature] = first.split(".");
+    const alteredPayload = Buffer.from(
+      JSON.stringify({ ...firstData, projectId: "project-2" }),
+    ).toString("base64url");
+    expect(() =>
+      verifyGitHubOAuthState(`${alteredPayload}.${signature}`),
+    ).toThrow();
+    const alteredUserPayload = Buffer.from(
+      JSON.stringify({ ...firstData, uid: "user-2" }),
+    ).toString("base64url");
+    expect(() =>
+      verifyGitHubOAuthState(`${alteredUserPayload}.${signature}`),
+    ).toThrow();
+    expect(payload).toBeTruthy();
+  });
 });

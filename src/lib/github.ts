@@ -52,10 +52,24 @@ export type GitHubWorkflowJob = {
   html_url: string;
 };
 
+const GITHUB_TIMEOUT_MS = 15_000;
+const MAX_JSON_BYTES = 1_000_000;
+const MAX_COLLECTION_ITEMS = 100;
+
+export class GitHubApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = "GitHubApiError";
+  }
+}
+
 async function fetchWithTimeout(
   url: string,
   options: RequestInit,
-  timeoutMs = 15_000,
+  timeoutMs = GITHUB_TIMEOUT_MS,
 ) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -64,6 +78,61 @@ async function fetchWithTimeout(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function readBoundedJson<T>(response: Response): Promise<T> {
+  const text = await readBoundedText(response, MAX_JSON_BYTES);
+  if (!text)
+    throw new GitHubApiError(
+      "GitHub returned an empty response.",
+      response.status,
+    );
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new GitHubApiError(
+      "GitHub returned malformed JSON.",
+      response.status,
+    );
+  }
+}
+
+async function fetchGitHubJson<T>(url: string, token: string): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(url, { headers: githubHeaders(token) });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new GitHubApiError("GitHub request timed out.", 504);
+    }
+    throw new GitHubApiError("GitHub is unavailable.", 502);
+  }
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new GitHubApiError("GitHub authentication failed.", 401);
+    }
+    if (response.status === 403) {
+      throw new GitHubApiError(
+        response.headers.get("x-ratelimit-remaining") === "0"
+          ? "GitHub rate limit reached."
+          : "GitHub permissions are insufficient.",
+        403,
+      );
+    }
+    if (response.status === 404) {
+      throw new GitHubApiError(
+        "GitHub repository or resource was not found.",
+        404,
+      );
+    }
+    throw new GitHubApiError(
+      `GitHub request failed (${response.status}).`,
+      response.status,
+    );
+  }
+
+  return readBoundedJson<T>(response);
 }
 
 function githubHeaders(token: string) {
@@ -114,16 +183,13 @@ export async function fetchGitHubWorkflowRuns(
   owner: string,
   repo: string,
 ) {
-  const response = await fetchWithTimeout(
-    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?per_page=20`,
-    { headers: githubHeaders(token) },
-  );
-  if (!response.ok)
-    throw new Error(`GitHub workflow retrieval failed (${response.status}).`);
-  const payload = (await response.json()) as {
+  const payload = await fetchGitHubJson<{
     workflow_runs?: GitHubWorkflowRun[];
-  };
-  return (payload.workflow_runs || []).slice(0, 20);
+  }>(
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?per_page=20`,
+    token,
+  );
+  return (payload.workflow_runs || []).slice(0, MAX_COLLECTION_ITEMS);
 }
 
 export async function fetchGitHubWorkflowJobs(
@@ -132,16 +198,11 @@ export async function fetchGitHubWorkflowJobs(
   repo: string,
   runId: number,
 ) {
-  const response = await fetchWithTimeout(
+  const payload = await fetchGitHubJson<{ jobs?: GitHubWorkflowJob[] }>(
     `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/jobs?per_page=20`,
-    { headers: githubHeaders(token) },
+    token,
   );
-  if (!response.ok)
-    throw new Error(
-      `GitHub workflow jobs retrieval failed (${response.status}).`,
-    );
-  const payload = (await response.json()) as { jobs?: GitHubWorkflowJob[] };
-  return (payload.jobs || []).slice(0, 20);
+  return (payload.jobs || []).slice(0, MAX_COLLECTION_ITEMS);
 }
 
 export async function fetchGitHubJobLogs(
@@ -151,12 +212,26 @@ export async function fetchGitHubJobLogs(
   jobId: number,
   maxBytes = 100_000,
 ) {
-  const response = await fetchWithTimeout(
-    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}/logs`,
-    { headers: { ...githubHeaders(token), Accept: "text/plain" } },
-  );
-  if (!response.ok)
-    throw new Error(`GitHub job log retrieval failed (${response.status}).`);
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}/logs`,
+      { headers: { ...githubHeaders(token), Accept: "text/plain" } },
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new GitHubApiError("GitHub job log request timed out.", 504);
+    }
+    throw new GitHubApiError("GitHub job logs are unavailable.", 502);
+  }
+  if (!response.ok) {
+    if (response.status === 404)
+      throw new GitHubApiError("GitHub job logs were not found.", 404);
+    throw new GitHubApiError(
+      `GitHub job log request failed (${response.status}).`,
+      response.status,
+    );
+  }
   return readBoundedText(response, Math.min(maxBytes, 100_000));
 }
 
@@ -165,84 +240,32 @@ export async function fetchGitHubRepositorySummary(
   owner: string,
   repo: string,
 ): Promise<GitHubRepositorySummary> {
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-
-  const [repoRes, branchesRes, commitsRes, prsRes, issuesRes] =
-    await Promise.all([
-      fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers }),
-      fetch(`https://api.github.com/repos/${owner}/${repo}/branches`, {
-        headers,
-      }),
-      fetch(
-        `https://api.github.com/repos/${owner}/${repo}/commits?per_page=10`,
-        { headers },
-      ),
-      fetch(
-        `https://api.github.com/repos/${owner}/${repo}/pulls?state=all&per_page=10`,
-        { headers },
-      ),
-      fetch(
-        `https://api.github.com/repos/${owner}/${repo}/issues?state=all&per_page=10`,
-        { headers },
-      ),
-    ]);
-
-  if (!repoRes.ok) {
-    throw new Error("GitHub repository retrieval failed.");
-  }
-
+  const baseUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   const [repository, branches, commits, pullRequests, issues] =
     await Promise.all([
-      repoRes.json() as Promise<GitHubRepositoryMeta>,
-      branchesRes.ok
-        ? (branchesRes.json() as Promise<
-            Array<{ name: string; protected: boolean }>
-          >)
-        : Promise.resolve([]),
-      commitsRes.ok
-        ? (commitsRes.json() as Promise<
-            Array<{
-              sha: string;
-              commit: {
-                message: string;
-                author: {
-                  name: string;
-                  date: string;
-                };
-              };
-              author?: { login: string };
-            }>
-          >)
-        : Promise.resolve([]),
-      prsRes.ok
-        ? (prsRes.json() as Promise<
-            Array<{
-              id: number;
-              title: string;
-              state: string;
-              created_at: string;
-            }>
-          >)
-        : Promise.resolve([]),
-      issuesRes.ok
-        ? (issuesRes.json() as Promise<
-            Array<{
-              id: number;
-              title: string;
-              state: string;
-              created_at: string;
-            }>
-          >)
-        : Promise.resolve([]),
+      fetchGitHubJson<GitHubRepositoryMeta>(baseUrl, token),
+      fetchGitHubJson<Array<{ name: string; protected: boolean }>>(
+        `${baseUrl}/branches?per_page=100`,
+        token,
+      ),
+      fetchGitHubJson<
+        Array<{
+          sha: string;
+          commit: { message: string; author: { name: string; date: string } };
+          author?: { login: string };
+        }>
+      >(`${baseUrl}/commits?per_page=100`, token),
+      fetchGitHubJson<
+        Array<{ id: number; title: string; state: string; created_at: string }>
+      >(`${baseUrl}/pulls?state=all&per_page=100`, token),
+      fetchGitHubJson<
+        Array<{ id: number; title: string; state: string; created_at: string }>
+      >(`${baseUrl}/issues?state=all&per_page=100`, token),
     ]);
 
   return {
     repository,
-    branches: branches.map((branch) => ({
+    branches: branches.slice(0, MAX_COLLECTION_ITEMS).map((branch) => ({
       name: branch.name,
       protected: Boolean(branch.protected),
     })),
@@ -252,13 +275,13 @@ export async function fetchGitHubRepositorySummary(
       author: commit.author?.login || commit.commit.author.name,
       date: commit.commit.author.date,
     })),
-    pullRequests: pullRequests.map((pr) => ({
+    pullRequests: pullRequests.slice(0, MAX_COLLECTION_ITEMS).map((pr) => ({
       id: pr.id,
       title: pr.title,
       state: pr.state,
       createdAt: pr.created_at,
     })),
-    issues: issues.map((issue) => ({
+    issues: issues.slice(0, MAX_COLLECTION_ITEMS).map((issue) => ({
       id: issue.id,
       title: issue.title,
       state: issue.state,

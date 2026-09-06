@@ -109,6 +109,7 @@ The live server currently writes project data to these project-scoped paths:
 - `projects/{projectId}/workflowRuns/{runId}`
 - `projects/{projectId}/auditLogs/{auditId}`
 - `githubConnections/{projectId}` with an encrypted GitHub token, readable only by the Admin SDK
+- `githubOAuthStates/{nonce}` for expiring, single-use OAuth state claims
 - `webhookDeliveries/{deliveryId}` for transactional webhook idempotency
 
 Each resource should include explicit ownership or membership metadata such as `ownerId`, `members`, `createdAt`, and `updatedAt`.
@@ -124,6 +125,8 @@ Rules should default deny and restrict reads or writes to authenticated users wi
 - GitHub access tokens are AES-GCM encrypted before storage and never returned to the browser.
 - Repository sync persists bounded metadata, recent commits/PRs/issues, and up to 20 workflow runs.
 - Job log reads are timeout-limited and capped at 100,000 bytes.
+- GitHub JSON responses are capped at 1 MB, collection responses at 100 records, assistant/RCA context at 100,000 characters, and audit metadata at 4 KB.
+- OAuth state is signed, expires after 10 minutes, contains a random nonce, and is consumed transactionally so callback state cannot be replayed.
 - Configure the webhook URL as `/api/github/webhook` with `GITHUB_WEBHOOK_SECRET`.
 
 ## Secret Manager setup

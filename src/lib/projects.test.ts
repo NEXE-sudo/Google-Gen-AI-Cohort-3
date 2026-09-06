@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canAccessProject,
+  canManageProjectIntegration,
   resolveProjectRole,
   type ProjectMemberRole,
 } from "./projects";
@@ -32,5 +33,20 @@ describe("project access model", () => {
     expect(canAccessProject(project, "marcus", "read")).toBe(true);
     expect(canAccessProject(project, "priya", "create")).toBe(false);
     expect(canAccessProject(project, "unknown-user", "read")).toBe(false);
+  });
+
+  it("restricts GitHub integration management to owners and admins", () => {
+    expect(canManageProjectIntegration(project, "alice")).toBe(true);
+    expect(
+      canManageProjectIntegration(
+        {
+          ...project,
+          members: [...project.members, { uid: "admin", role: "admin" }],
+        },
+        "admin",
+      ),
+    ).toBe(true);
+    expect(canManageProjectIntegration(project, "marcus")).toBe(false);
+    expect(canManageProjectIntegration(project, "priya")).toBe(false);
   });
 });

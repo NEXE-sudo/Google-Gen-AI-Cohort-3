@@ -3,6 +3,13 @@ import { getFirebaseAdminDb } from "./firebaseAdmin";
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 
+export interface GitHubOAuthState {
+  projectId: string;
+  uid: string;
+  nonce: string;
+  expiresAt: number;
+}
+
 function requireEncryptionKey() {
   const value = process.env.GITHUB_TOKEN_ENCRYPTION_KEY;
   if (!value) {
@@ -25,15 +32,18 @@ export function createGitHubOAuthState(args: {
     JSON.stringify({
       projectId: args.projectId,
       uid: args.uid,
+      nonce: crypto.randomBytes(32).toString("hex"),
       expiresAt: Date.now() + STATE_TTL_MS,
     }),
   ).toString("base64url");
   return `${payload}.${signState(payload)}`;
 }
 
-export function verifyGitHubOAuthState(state: string) {
+export function verifyGitHubOAuthState(state: string): GitHubOAuthState {
   const [payload, signature] = state.split(".");
-  if (!payload || !signature) throw new Error("Malformed GitHub OAuth state.");
+  if (!payload || !signature || state.split(".").length !== 2) {
+    throw new Error("Malformed GitHub OAuth state.");
+  }
 
   const expected = signState(payload);
   const expectedBuffer = Buffer.from(expected, "utf8");
@@ -47,15 +57,57 @@ export function verifyGitHubOAuthState(state: string) {
 
   const parsed = JSON.parse(
     Buffer.from(payload, "base64url").toString("utf8"),
-  ) as {
-    projectId: string;
-    uid: string;
-    expiresAt: number;
-  };
-  if (!parsed.projectId || !parsed.uid || parsed.expiresAt < Date.now()) {
+  ) as GitHubOAuthState;
+  if (
+    !parsed.projectId ||
+    !parsed.uid ||
+    !parsed.nonce ||
+    !/^[a-f0-9]{64}$/.test(parsed.nonce) ||
+    !Number.isFinite(parsed.expiresAt) ||
+    parsed.expiresAt < Date.now()
+  ) {
     throw new Error("Expired GitHub OAuth state.");
   }
   return parsed;
+}
+
+export async function storeGitHubOAuthState(state: GitHubOAuthState) {
+  await getFirebaseAdminDb()
+    .collection("githubOAuthStates")
+    .doc(state.nonce)
+    .set({
+      ...state,
+      consumedAt: null,
+      createdAt: new Date().toISOString(),
+    });
+}
+
+export async function consumeGitHubOAuthState(state: GitHubOAuthState) {
+  const reference = getFirebaseAdminDb()
+    .collection("githubOAuthStates")
+    .doc(state.nonce);
+
+  await getFirebaseAdminDb().runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(reference);
+    if (!snapshot.exists) throw new Error("GitHub OAuth state was not found.");
+
+    const stored = snapshot.data() as GitHubOAuthState & {
+      consumedAt?: string | null;
+    };
+    if (
+      stored.projectId !== state.projectId ||
+      stored.uid !== state.uid ||
+      stored.nonce !== state.nonce ||
+      stored.expiresAt < Date.now() ||
+      stored.consumedAt
+    ) {
+      throw new Error(
+        "GitHub OAuth state is invalid or has already been used.",
+      );
+    }
+
+    transaction.update(reference, { consumedAt: new Date().toISOString() });
+  });
 }
 
 export function encryptGitHubToken(token: string) {

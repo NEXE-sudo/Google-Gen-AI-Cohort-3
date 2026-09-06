@@ -55,7 +55,11 @@ service cloud.firestore {
         request.resource.data.memberUids[0] == request.auth.uid;
       allow update: if hasProjectRole(projectId, ["owner", "admin"]) &&
         request.resource.data.ownerId == resource.data.ownerId &&
-        request.resource.data.members[resource.data.ownerId].role == "owner";
+        request.resource.data.members[resource.data.ownerId].role == "owner" &&
+        (
+          isProjectOwner(projectId) ||
+          request.resource.data.members == resource.data.members
+        );
       allow delete: if isProjectOwner(projectId);
     }
 
