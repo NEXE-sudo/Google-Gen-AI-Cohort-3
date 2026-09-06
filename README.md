@@ -72,6 +72,8 @@ Required variables for the current project:
 
 ```bash
 GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_FALLBACK_MODEL=gemini-2.5-flash-lite
 NODE_ENV=development
 PORT=3000
 ```
@@ -131,7 +133,7 @@ Rules should default deny and restrict reads or writes to authenticated users wi
 
 ## Secret Manager setup
 
-For production deployment, store credentials such as Gemini API keys or GitHub tokens in Secret Manager and mount them as runtime environment variables to the Cloud Run service.
+For production deployment, store static application secrets such as `GEMINI_API_KEY`, `GITHUB_CLIENT_SECRET`, `GITHUB_OAUTH_STATE_SECRET`, `GITHUB_TOKEN_ENCRYPTION_KEY`, and `GITHUB_WEBHOOK_SECRET` in Secret Manager and expose them through Cloud Run secret references. Cloud Run should use its service identity/Application Default Credentials for Firebase Admin rather than a committed service-account JSON file. Per-project GitHub OAuth access tokens remain encrypted in the server-only Firestore `githubConnections` collection; they are dynamic user data and are not stored in one shared Secret Manager environment variable.
 
 Example:
 
@@ -143,6 +145,8 @@ echo -n "YOUR_KEY" | gcloud secrets versions add GEMINI_API_KEY --data-file=-
 ## Gemini configuration
 
 - Use a backend-only AI service layer.
+- The installed `@google/genai` SDK is used with native `responseJsonSchema` structured output for RCA. The application still validates the returned JSON and evidence references before use.
+- `GEMINI_MODEL` defaults to `gemini-2.5-flash`; `GEMINI_FALLBACK_MODEL` defaults to `gemini-2.5-flash-lite`. Fallback occurs only for model-not-found, rate-limit, or transient service failures, never authentication/configuration failures.
 - Validate requests and model output before persistence.
 - Keep prompts bounded and external content treated as untrusted.
 - Prefer structured JSON outputs where practical.
