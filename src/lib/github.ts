@@ -128,8 +128,7 @@ export function normalizeWorkflowJob(
     id,
     name: typeof value.name === "string" ? value.name : "Unnamed job",
     status: typeof value.status === "string" ? value.status : "unknown",
-    conclusion:
-      typeof value.conclusion === "string" ? value.conclusion : null,
+    conclusion: typeof value.conclusion === "string" ? value.conclusion : null,
     startedAt:
       typeof value.started_at === "string"
         ? value.started_at
