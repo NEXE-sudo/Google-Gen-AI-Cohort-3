@@ -30,6 +30,7 @@ import {
   type DemoTab,
 } from "../data/demoData";
 import { createIncident, listVisibleProjects } from "../lib/projectStore";
+import { getCIHealthMetrics } from "../lib/ciHealth";
 import {
   readSelectedProjectId,
   resolveSelectedProjectId,
@@ -120,7 +121,7 @@ type LiveWorkflowRun = {
   branch: string | null;
   commitSha: string;
   startedAt: string | null;
-  completedAt: string | null;
+  updatedAt: string | null;
   url: string | null;
 };
 
@@ -302,16 +303,15 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
         branch: run.branch || "unknown",
         duration: "Unavailable",
         commit: run.commitSha.slice(0, 8) || "Unavailable",
-        timestamp: run.startedAt || run.completedAt,
+        timestamp: run.startedAt || run.updatedAt,
         url: run.url,
       }));
   const securityItems = isDemoMode ? demoSecurity : [];
-  const completedRuns = liveWorkflowRuns.filter((run) => run.conclusion);
-  const successfulRuns = completedRuns.filter(
-    (run) => run.conclusion === "success",
-  );
-  const failedRuns = completedRuns.filter(
-    (run) => !["success", "neutral", "skipped"].includes(run.conclusion || ""),
+  const ciHealthMetrics = getCIHealthMetrics(liveWorkflowRuns);
+  const failedRuns = liveWorkflowRuns.filter((run) =>
+    ["failure", "cancelled", "timed_out", "action_required"].includes(
+      run.conclusion || "",
+    ),
   );
   const liveRecentActivity = [
     ...liveIncidents.map((incident) => ({
@@ -319,7 +319,7 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
       text: `Incident recorded: ${incident.title}`,
     })),
     ...liveWorkflowRuns.map((run) => ({
-      timestamp: run.startedAt || run.completedAt,
+      timestamp: run.startedAt || run.updatedAt,
       text: `Workflow ${run.name} ${run.conclusion || run.status}.`,
     })),
     ...liveMemory.map((entry) => ({
@@ -342,17 +342,15 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
       ]
     : [
         {
-          label: "Active incidents",
           value: liveIncidents.filter(
             (incident) => incident.status !== "Resolved",
           ).length,
+          label: "Active incidents",
         },
-        { label: "Recent failures", value: failedRuns.length },
+        { label: "Recent failures", value: ciHealthMetrics.failedRunCount },
         {
           label: "CI health",
-          value: completedRuns.length
-            ? `${Math.round((successfulRuns.length / completedRuns.length) * 100)}%`
-            : "Unavailable",
+          value: ciHealthMetrics.health,
         },
         { label: "Security findings", value: "Unavailable" },
       ];

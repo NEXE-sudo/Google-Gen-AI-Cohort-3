@@ -50,7 +50,7 @@ export type PersistedWorkflowRun = {
   branch: string | null;
   commitSha: string;
   startedAt: string | null;
-  completedAt: string | null;
+  updatedAt: string | null;
   url: string | null;
 };
 
@@ -83,11 +83,11 @@ export function normalizeWorkflowRun(
         : typeof value.startedAt === "string"
           ? value.startedAt
           : null,
-    completedAt:
+    updatedAt:
       typeof value.updated_at === "string"
         ? value.updated_at
-        : typeof value.completedAt === "string"
-          ? value.completedAt
+        : typeof value.updatedAt === "string"
+          ? value.updatedAt
           : null,
     url:
       typeof value.html_url === "string"
