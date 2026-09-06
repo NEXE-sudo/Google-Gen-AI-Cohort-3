@@ -66,8 +66,10 @@ const statusClasses: Record<string, string> = {
   Low: "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30",
 };
 
-function formatDate(iso: string) {
+function formatDate(iso: string | null | undefined) {
+  if (!iso) return "Unavailable";
   const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "Unavailable";
   return date.toLocaleString([], {
     month: "short",
     day: "numeric",
@@ -95,6 +97,11 @@ type LiveIncident = {
   summary: string;
   source: string;
   createdAt: string;
+  rootCause?: string;
+  evidence?: string[];
+  relatedCommits?: string[];
+  relatedPullRequests?: string[];
+  recommendedActions?: string[];
 };
 
 type LiveMemory = {
@@ -110,9 +117,11 @@ type LiveWorkflowRun = {
   name: string;
   conclusion: string | null;
   status: string;
-  head_branch: string | null;
-  head_sha: string;
-  run_started_at: string;
+  branch: string | null;
+  commitSha: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  url: string | null;
 };
 
 export function TraceDashboard({ currentUser }: { currentUser: User }) {
@@ -132,6 +141,9 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
   const [assistantQuestion, setAssistantQuestion] = useState("");
   const [assistantAnswer, setAssistantAnswer] = useState<string | null>(null);
   const [assistantLoading, setAssistantLoading] = useState(false);
+  const [projectPendingDeletion, setProjectPendingDeletion] =
+    useState<LiveProject | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
@@ -211,12 +223,11 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
             fetch(`/api/projects/${project.id}/workflow-runs`, { headers }),
           ]);
 
-        if (
-          !incidentsResponse.ok ||
-          !memoryResponse.ok ||
-          !workflowRunsResponse.ok
-        ) {
+        if (!incidentsResponse.ok || !memoryResponse.ok) {
           throw new Error("Unable to load project intelligence.");
+        }
+        if (!workflowRunsResponse.ok) {
+          throw new Error("Unable to load workflow history.");
         }
 
         const incidentsPayload = (await incidentsResponse.json()) as {
@@ -259,14 +270,20 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
     : (liveProjects.find((project) => project.id === selectedProjectId) ??
       null);
   const incidentItems = isDemoMode
-    ? demoIncidents
+    ? demoIncidents.map((incident) => ({
+        ...incident,
+        relatedCommits: [] as string[],
+        relatedPullRequests: [] as string[],
+      }))
     : liveIncidents.map((incident) => ({
         title: incident.title,
         severity: incident.severity,
         status: incident.status,
         detectedAt: incident.createdAt,
         source: incident.source,
-        rootCause: incident.summary,
+        rootCause: incident.rootCause || incident.summary,
+        relatedCommits: incident.relatedCommits || [],
+        relatedPullRequests: incident.relatedPullRequests || [],
       }));
   const memoryItems = isDemoMode
     ? demoMemory
@@ -279,14 +296,43 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
   const workflowItems = isDemoMode
     ? demoCICD
     : liveWorkflowRuns.map((run) => ({
+        id: run.id,
         workflow: run.name,
         status: run.conclusion || run.status,
-        branch: run.head_branch || "unknown",
+        branch: run.branch || "unknown",
         duration: "Unavailable",
-        commit: run.head_sha.slice(0, 8),
-        timestamp: run.run_started_at,
+        commit: run.commitSha.slice(0, 8) || "Unavailable",
+        timestamp: run.startedAt || run.completedAt,
+        url: run.url,
       }));
   const securityItems = isDemoMode ? demoSecurity : [];
+  const completedRuns = liveWorkflowRuns.filter((run) => run.conclusion);
+  const successfulRuns = completedRuns.filter(
+    (run) => run.conclusion === "success",
+  );
+  const failedRuns = completedRuns.filter(
+    (run) => !["success", "neutral", "skipped"].includes(run.conclusion || ""),
+  );
+  const liveRecentActivity = [
+    ...liveIncidents.map((incident) => ({
+      timestamp: incident.createdAt,
+      text: `Incident recorded: ${incident.title}`,
+    })),
+    ...liveWorkflowRuns.map((run) => ({
+      timestamp: run.startedAt || run.completedAt,
+      text: `Workflow ${run.name} ${run.conclusion || run.status}.`,
+    })),
+    ...liveMemory.map((entry) => ({
+      timestamp: null,
+      text: `Engineering memory updated: ${entry.problem}`,
+    })),
+  ]
+    .sort((left, right) => {
+      const leftTime = left.timestamp ? Date.parse(left.timestamp) : 0;
+      const rightTime = right.timestamp ? Date.parse(right.timestamp) : 0;
+      return rightTime - leftTime;
+    })
+    .slice(0, 5);
   const overviewCards = isDemoMode
     ? [
         { label: "Active incidents", value: demoOverview.activeIncidents },
@@ -295,9 +341,18 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
         { label: "Security findings", value: demoOverview.securityFindings },
       ]
     : [
-        { label: "Active incidents", value: liveIncidents.length },
-        { label: "Recent failures", value: "Unavailable" },
-        { label: "CI health", value: "Unavailable" },
+        {
+          label: "Active incidents",
+          value: liveIncidents.filter((incident) => incident.status !== "Resolved")
+            .length,
+        },
+        { label: "Recent failures", value: failedRuns.length },
+        {
+          label: "CI health",
+          value: completedRuns.length
+            ? `${Math.round((successfulRuns.length / completedRuns.length) * 100)}%`
+            : "Unavailable",
+        },
         { label: "Security findings", value: "Unavailable" },
       ];
 
@@ -318,7 +373,11 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
   }, [memoryItems, query]);
 
   const handleCreateIncident = async () => {
-    if (!isDemoMode && activeProject) {
+    if (!isDemoMode) {
+      if (!activeProject) {
+        setIncidentNotice("Select an authorised project before creating an incident.");
+        return;
+      }
       try {
         const token = await currentUser.getIdToken();
         const response = await fetch(
@@ -415,14 +474,18 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
   const handleDeleteProject = async (project: LiveProject) => {
     if (isDemoMode) return;
 
-    const confirmed = window.confirm(
-      `Delete project “${project.name}” (${project.repository})? This removes associated incidents, memory, sync data, and GitHub connection data.`,
-    );
-    if (!confirmed) return;
+    setProjectPendingDeletion(project);
+    setDeleteConfirmation("");
+  };
+
+  const handleConfirmDeleteProject = async () => {
+    if (!projectPendingDeletion || deleteConfirmation !== projectPendingDeletion.name) {
+      return;
+    }
 
     try {
       const token = await currentUser.getIdToken();
-      const response = await fetch(`/api/projects/${project.id}`, {
+      const response = await fetch(`/api/projects/${projectPendingDeletion.id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -434,10 +497,10 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
       }
 
       const remainingProjects = liveProjects.filter(
-        (candidate) => candidate.id !== project.id,
+        (candidate) => candidate.id !== projectPendingDeletion.id,
       );
       setLiveProjects(remainingProjects);
-      if (selectedProjectId === project.id) {
+      if (selectedProjectId === projectPendingDeletion.id) {
         const nextSelection = resolveSelectedProjectId(remainingProjects, null);
         setSelectedProjectId(nextSelection);
         writeSelectedProjectId(nextSelection);
@@ -445,7 +508,9 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
         setLiveMemory([]);
         setLiveWorkflowRuns([]);
       }
-      setIncidentNotice(`Project “${project.name}” was deleted.`);
+      setIncidentNotice(`Project “${projectPendingDeletion.name}” was deleted.`);
+      setProjectPendingDeletion(null);
+      setDeleteConfirmation("");
     } catch (error) {
       setIncidentNotice(
         error instanceof Error ? error.message : "Project deletion failed.",
@@ -491,8 +556,14 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
       };
       if (!response.ok)
         throw new Error(payload.error || "Repository synchronization failed.");
-      setLiveWorkflowRuns(payload.workflowRuns || []);
-      setIncidentNotice("Repository metadata and workflow runs synchronized.");
+      if (projectId === selectedProjectId) {
+        setLiveWorkflowRuns(payload.workflowRuns || []);
+      }
+      setIncidentNotice(
+        payload.workflowRuns?.length
+          ? "Repository metadata and workflow runs synchronized."
+          : "Repository synchronized. No GitHub Actions workflow runs found.",
+      );
     } catch (error) {
       setIncidentNotice(
         error instanceof Error
@@ -655,6 +726,46 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
             </div>
           )}
 
+          {projectPendingDeletion && (
+            <div className="mb-4 rounded-xl border border-red-500/40 bg-red-950/40 p-4 text-sm text-red-100">
+              <div className="font-semibold">
+                Delete project &quot;{projectPendingDeletion.name}&quot;?
+              </div>
+              <p className="mt-2 text-red-200">
+                This permanently removes incidents, engineering memory,
+                workflow history, repository sync data, and GitHub connection
+                data.
+              </p>
+              <label className="mt-3 block text-xs text-red-200">
+                Type the project name to confirm.
+                <input
+                  value={deleteConfirmation}
+                  onChange={(event) => setDeleteConfirmation(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-red-400/40 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+                  placeholder={projectPendingDeletion.name}
+                />
+              </label>
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={() => void handleConfirmDeleteProject()}
+                  disabled={deleteConfirmation !== projectPendingDeletion.name}
+                  className="rounded-lg bg-red-500 px-3 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Permanently delete
+                </button>
+                <button
+                  onClick={() => {
+                    setProjectPendingDeletion(null);
+                    setDeleteConfirmation("");
+                  }}
+                  className="rounded-lg border border-slate-600 px-3 py-2 text-xs text-slate-200"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
           {activeTab === "overview" && (
             <div className="space-y-6">
               <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -679,20 +790,36 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                     <h2 className="text-lg font-semibold text-white">
                       Recent engineering activity
                     </h2>
-                    <span className="text-xs uppercase tracking-[0.2em] text-cyan-300">
-                      Updated 14m ago
-                    </span>
                   </div>
                   <div className="space-y-3">
-                    {demoOverview.recentActivity.map((item) => (
+                    {(isDemoMode
+                      ? demoOverview.recentActivity.map((text) => ({
+                          text,
+                          timestamp: null,
+                        }))
+                      : liveRecentActivity
+                    ).map((item) => (
                       <div
-                        key={item}
+                        key={`${item.text}-${item.timestamp || "activity"}`}
                         className="flex gap-3 rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-sm text-slate-300"
                       >
                         <div className="mt-1 h-2.5 w-2.5 rounded-full bg-cyan-400" />
-                        <span>{item}</span>
+                        <span>
+                          {item.text}
+                          {item.timestamp && (
+                            <span className="ml-2 text-xs text-slate-500">
+                              {formatDate(item.timestamp)}
+                            </span>
+                          )}
+                        </span>
                       </div>
                     ))}
+                    {!isDemoMode && liveRecentActivity.length === 0 && (
+                      <div className="rounded-xl border border-dashed border-slate-700 p-4 text-sm text-slate-400">
+                        No live engineering activity has been recorded for this
+                        project.
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -701,15 +828,16 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                     <h2 className="text-lg font-semibold text-white">
                       AI summary
                     </h2>
-                    <span className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-cyan-300">
-                      High confidence
-                    </span>
+                    {isDemoMode && (
+                      <span className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-cyan-300">
+                        High confidence
+                      </span>
+                    )}
                   </div>
                   <p className="text-sm leading-7 text-slate-300">
-                    The latest auth flow regression is the strongest signal in
-                    the system. Evidence points to a middleware ordering change
-                    just before the first failed integration workflow, with one
-                    prior incident showing similar request-context loss.
+                    {isDemoMode
+                      ? "The latest auth flow regression is the strongest signal in the system. Evidence points to a middleware ordering change just before the first failed integration workflow, with one prior incident showing similar request-context loss."
+                      : "No generated summary is available. Ask the project assistant for an evidence-based analysis."}
                   </p>
                 </div>
               </section>
@@ -874,7 +1002,19 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                         Related
                       </div>
                       <div className="mt-2 text-sm text-slate-300">
-                        PR #418 • Commit d1c9f2a
+                        {incident.relatedPullRequests?.length ||
+                        incident.relatedCommits?.length ? (
+                          [
+                            ...(incident.relatedPullRequests || []).map(
+                              (pullRequest) => `PR ${pullRequest}`,
+                            ),
+                            ...(incident.relatedCommits || []).map(
+                              (commit) => `Commit ${commit}`,
+                            ),
+                          ].join(" • ")
+                        ) : (
+                          "No related changes linked."
+                        )}
                       </div>
                     </div>
                   </div>
@@ -919,6 +1059,11 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                     <div className="text-sm text-slate-300">{run.branch}</div>
                   </div>
                 ))}
+                {!isDemoMode && workflowItems.length === 0 && (
+                  <div className="rounded-xl border border-dashed border-slate-700 p-6 text-sm text-slate-400">
+                    No GitHub Actions workflow runs found.
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -964,6 +1109,11 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                   </div>
                 </div>
               ))}
+              {!isDemoMode && securityItems.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-900 p-6 text-sm text-slate-400">
+                  No security findings synced.
+                </div>
+              )}
             </div>
           )}
 
@@ -1057,20 +1207,22 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                     </button>
                   </form>
                 )}
-                <div className="mt-4 space-y-2">
-                  {demoAssistantPromptSuggestions.map((prompt) => (
-                    <button
-                      key={prompt}
-                      onClick={() => {
-                        setAssistantQuestion(prompt);
-                        void handleAskAssistant(prompt);
-                      }}
-                      className="block w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-left text-sm text-slate-200 hover:border-cyan-400/40 hover:bg-slate-900"
-                    >
-                      {prompt}
-                    </button>
-                  ))}
-                </div>
+                {isDemoMode && (
+                  <div className="mt-4 space-y-2">
+                    {demoAssistantPromptSuggestions.map((prompt) => (
+                      <button
+                        key={prompt}
+                        onClick={() => {
+                          setAssistantQuestion(prompt);
+                          void handleAskAssistant(prompt);
+                        }}
+                        className="block w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-left text-sm text-slate-200 hover:border-cyan-400/40 hover:bg-slate-900"
+                      >
+                        {prompt}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
@@ -1080,19 +1232,30 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                 <div className="mt-4 space-y-3 text-sm text-slate-300">
                   <div className="flex items-center gap-3">
                     <GitCommitHorizontal className="h-4 w-4 text-cyan-300" />{" "}
-                    Recent commit: {workflowItems[0]?.commit || "Unavailable"}
+                    Recent commit: {isDemoMode
+                      ? workflowItems[0]?.commit || "Unavailable"
+                      : liveWorkflowRuns[0]?.commitSha.slice(0, 8) ||
+                        "Unavailable"}
                   </div>
                   <div className="flex items-center gap-3">
                     <Workflow className="h-4 w-4 text-cyan-300" /> Last failed
-                    workflow: {workflowItems[0]?.workflow || "Unavailable"}
+                    workflow: {isDemoMode
+                      ? workflowItems[0]?.workflow || "Unavailable"
+                      : liveWorkflowRuns.find((run) =>
+                          failedRuns.includes(run),
+                        )?.name || "Unavailable"}
                   </div>
                   <div className="flex items-center gap-3">
                     <AlertTriangle className="h-4 w-4 text-cyan-300" />{" "}
-                    Severity: High
+                    Severity: {isDemoMode
+                      ? "High"
+                      : liveIncidents[0]?.severity || "Unavailable"}
                   </div>
                   <div className="flex items-center gap-3">
                     <Shield className="h-4 w-4 text-cyan-300" /> Security
-                    posture: review recommended
+                    posture: {isDemoMode
+                      ? "review recommended"
+                      : "Unavailable"}
                   </div>
                 </div>
               </div>

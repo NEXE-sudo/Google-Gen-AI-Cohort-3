@@ -9,7 +9,11 @@ import {
   type ProjectPermission,
 } from "../lib/projects";
 import type { IncidentSeverity, IncidentStatus } from "../lib/projectStore";
-import { parseGitHubRepository } from "../lib/github";
+import {
+  normalizeWorkflowRun,
+  parseGitHubRepository,
+  type PersistedWorkflowRun,
+} from "../lib/github";
 import { redactSecrets } from "../lib/security";
 
 export interface PersistedIncident {
@@ -295,7 +299,14 @@ export async function listWorkflowRuns(projectId: string) {
     .orderBy("syncedAt", "desc")
     .limit(50)
     .get();
-  return snapshot.docs.map((document) => document.data());
+  return snapshot.docs
+    .map((document) =>
+      normalizeWorkflowRun({
+        ...document.data(),
+        id: document.data().id || document.id,
+      }),
+    )
+    .filter((run) => run !== null);
 }
 
 export async function createMemoryFromIncident(incident: PersistedIncident) {
@@ -411,16 +422,6 @@ export async function deleteProjectForOwner(args: {
     await batch.commit();
   }
 
-  await db.collection("auditLogs").add({
-    projectId: args.projectId,
-    actorId: args.actorId,
-    action: "PROJECT_DELETED",
-    targetType: "project",
-    targetId: args.projectId,
-    result: "success",
-    createdAt: now(),
-  });
-
   return { success: true, projectId: args.projectId };
 }
 
@@ -431,7 +432,7 @@ export async function saveRepositorySync(args: {
   recentCommits: unknown;
   pullRequests: unknown;
   issues: unknown;
-  workflowRuns: Array<{ id: number; [key: string]: unknown }>;
+  workflowRuns: PersistedWorkflowRun[];
 }) {
   const projectReference = projectCollection().doc(args.projectId);
   const repositoryData = {
@@ -451,14 +452,37 @@ export async function saveRepositorySync(args: {
     )
     .set(repositoryData);
 
-  const batch = getFirebaseAdminDb().batch();
-  for (const run of args.workflowRuns.slice(0, 20)) {
-    batch.set(projectReference.collection("workflowRuns").doc(String(run.id)), {
-      ...run,
-      syncedAt: now(),
-    });
+  const workflowCollection = projectReference.collection("workflowRuns");
+  const workflowRuns = args.workflowRuns.slice(0, 50);
+  const currentRunIds = new Set(workflowRuns.map((run) => String(run.id)));
+  const existingRuns = await workflowCollection
+    .orderBy("syncedAt", "desc")
+    .get();
+  const staleReferences = existingRuns.docs
+    .filter((document) => !currentRunIds.has(document.id))
+    .map((document) => document.ref);
+
+  for (
+    let index = 0;
+    index < Math.max(workflowRuns.length, staleReferences.length);
+    index += 400
+  ) {
+    const batch = getFirebaseAdminDb().batch();
+    for (const run of workflowRuns.slice(index, index + 400)) {
+      batch.set(
+        workflowCollection.doc(String(run.id)),
+        {
+          ...run,
+          syncedAt: now(),
+        },
+        { merge: false },
+      );
+    }
+    for (const reference of staleReferences.slice(index, index + 400)) {
+      batch.delete(reference);
+    }
+    await batch.commit();
   }
-  await batch.commit();
 }
 
 export async function claimWebhookDelivery(args: {
@@ -527,14 +551,14 @@ export async function saveWorkflowRunEvent(args: {
   projectId: string;
   run: Record<string, unknown>;
 }) {
-  const runId = String(args.run.id || "");
-  if (!runId) throw new Error("Workflow event is missing an id.");
+  const run = normalizeWorkflowRun(args.run);
+  if (!run) throw new Error("Workflow event is missing a valid id.");
   await projectCollection()
     .doc(args.projectId)
     .collection("workflowRuns")
-    .doc(runId)
+    .doc(String(run.id))
     .set(
-      { ...args.run, syncedAt: now(), source: "github-webhook" },
-      { merge: true },
+      { ...run, syncedAt: now(), source: "github-webhook" },
+      { merge: false },
     );
 }

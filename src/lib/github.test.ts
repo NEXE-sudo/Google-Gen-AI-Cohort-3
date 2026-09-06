@@ -5,7 +5,7 @@ import {
   createGitHubOAuthState,
   verifyGitHubOAuthState,
 } from "../server/githubConnections";
-import { parseGitHubRepository } from "./github";
+import { normalizeWorkflowRun, parseGitHubRepository } from "./github";
 
 describe("GitHub integration boundaries", () => {
   it("accepts owner/name repository identifiers and rejects arbitrary URLs", () => {
@@ -19,6 +19,34 @@ describe("GitHub integration boundaries", () => {
       parseGitHubRepository("https://example.com/acme/payments"),
     ).toThrow();
     expect(() => parseGitHubRepository("acme")).toThrow();
+  });
+
+  it("normalizes workflow runs with stable IDs and no token data", () => {
+    expect(
+      normalizeWorkflowRun({
+        id: 42,
+        name: "build",
+        status: "completed",
+        conclusion: "success",
+        head_branch: "main",
+        head_sha: "abcdef123456",
+        run_started_at: "2026-09-06T10:00:00.000Z",
+        updated_at: "2026-09-06T10:05:00.000Z",
+        html_url: "https://github.com/acme/app/actions/runs/42",
+        access_token: "must-not-be-stored",
+      }),
+    ).toEqual({
+      id: 42,
+      name: "build",
+      status: "completed",
+      conclusion: "success",
+      branch: "main",
+      commitSha: "abcdef123456",
+      startedAt: "2026-09-06T10:00:00.000Z",
+      completedAt: "2026-09-06T10:05:00.000Z",
+      url: "https://github.com/acme/app/actions/runs/42",
+    });
+    expect(normalizeWorkflowRun({ id: "not-a-run" })).toBeNull();
   });
 
   it("round-trips encrypted GitHub tokens without exposing plaintext", () => {

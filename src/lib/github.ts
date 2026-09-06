@@ -32,15 +32,72 @@ export type GitHubRepositorySummary = {
 
 export type GitHubWorkflowRun = {
   id: number;
+  name?: string;
+  status?: string;
+  conclusion: string | null;
+  head_sha?: string;
+  head_branch: string | null;
+  run_started_at?: string;
+  updated_at?: string;
+  html_url?: string;
+};
+
+export type PersistedWorkflowRun = {
+  id: number;
   name: string;
   status: string;
   conclusion: string | null;
-  head_sha: string;
-  head_branch: string | null;
-  run_started_at: string;
-  updated_at: string;
-  html_url: string;
+  branch: string | null;
+  commitSha: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  url: string | null;
 };
+
+export function normalizeWorkflowRun(
+  value: Record<string, unknown>,
+): PersistedWorkflowRun | null {
+  const id = Number(value.id);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+
+  return {
+    id,
+    name: typeof value.name === "string" ? value.name : "Unnamed workflow",
+    status: typeof value.status === "string" ? value.status : "unknown",
+    conclusion:
+      typeof value.conclusion === "string" ? value.conclusion : null,
+    branch:
+      typeof value.head_branch === "string"
+        ? value.head_branch
+        : typeof value.branch === "string"
+          ? value.branch
+          : null,
+    commitSha:
+      typeof value.head_sha === "string"
+        ? value.head_sha
+        : typeof value.commitSha === "string"
+          ? value.commitSha
+          : "",
+    startedAt:
+      typeof value.run_started_at === "string"
+        ? value.run_started_at
+        : typeof value.startedAt === "string"
+          ? value.startedAt
+          : null,
+    completedAt:
+      typeof value.updated_at === "string"
+        ? value.updated_at
+        : typeof value.completedAt === "string"
+          ? value.completedAt
+          : null,
+    url:
+      typeof value.html_url === "string"
+        ? value.html_url
+        : typeof value.url === "string"
+          ? value.url
+          : null,
+  };
+}
 
 export type GitHubWorkflowJob = {
   id: number;
@@ -186,10 +243,13 @@ export async function fetchGitHubWorkflowRuns(
   const payload = await fetchGitHubJson<{
     workflow_runs?: GitHubWorkflowRun[];
   }>(
-    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?per_page=20`,
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?per_page=50`,
     token,
   );
-  return (payload.workflow_runs || []).slice(0, MAX_COLLECTION_ITEMS);
+  return (payload.workflow_runs || [])
+    .slice(0, 50)
+    .map((run) => normalizeWorkflowRun(run as unknown as Record<string, unknown>))
+    .filter((run): run is PersistedWorkflowRun => run !== null);
 }
 
 export async function fetchGitHubWorkflowJobs(
