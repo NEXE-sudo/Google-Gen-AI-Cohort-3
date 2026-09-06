@@ -79,8 +79,10 @@ export async function fetchGitHubRepositorySummary(
               sha: string;
               commit: {
                 message: string;
-                author: { name: string };
-                author: { date: string };
+                author: {
+                  name: string;
+                  date: string;
+                };
               };
               author?: { login: string };
             }>

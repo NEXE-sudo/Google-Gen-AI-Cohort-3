@@ -1,3 +1,5 @@
+import type { ProjectMemberRole } from "../lib/projects";
+
 export type DemoTab =
   | "overview"
   | "projects"
@@ -8,7 +10,17 @@ export type DemoTab =
   | "assistant"
   | "settings";
 
-export const demoProject = {
+export const demoProject: {
+  id: string;
+  name: string;
+  ownerId: string;
+  status: string;
+  repository: string;
+  branches: string[];
+  members: Array<{ uid: string; role: ProjectMemberRole }>;
+  createdAt: string;
+  updatedAt: string;
+} = {
   id: "proj_trace_demo",
   name: "Northstar Payments",
   ownerId: "alice",
@@ -36,7 +48,16 @@ export const demoOverview = {
   ],
 };
 
-export const demoProjects = [
+export const demoProjects: Array<{
+  id: string;
+  name: string;
+  ownerId: string;
+  repository: string;
+  status: string;
+  members: Array<{ uid: string; role: ProjectMemberRole }>;
+  createdAt: string;
+  updatedAt: string;
+}> = [
   {
     id: "proj_trace_demo",
     name: "Northstar Payments",
