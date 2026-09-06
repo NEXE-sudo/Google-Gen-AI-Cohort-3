@@ -23,17 +23,17 @@ describe("GitHub integration boundaries", () => {
 
   it("normalizes workflow runs with stable IDs and no token data", () => {
     const normalized = normalizeWorkflowRun({
-        id: 42,
-        name: "build",
-        status: "completed",
-        conclusion: "success",
-        head_branch: "main",
-        head_sha: "abcdef123456",
-        run_started_at: "2026-09-06T10:00:00.000Z",
-        updated_at: "2026-09-06T10:05:00.000Z",
-        html_url: "https://github.com/acme/app/actions/runs/42",
-        access_token: "must-not-be-stored",
-      });
+      id: 42,
+      name: "build",
+      status: "completed",
+      conclusion: "success",
+      head_branch: "main",
+      head_sha: "abcdef123456",
+      run_started_at: "2026-09-06T10:00:00.000Z",
+      updated_at: "2026-09-06T10:05:00.000Z",
+      html_url: "https://github.com/acme/app/actions/runs/42",
+      access_token: "must-not-be-stored",
+    });
     expect(normalized).toEqual({
       id: 42,
       name: "build",

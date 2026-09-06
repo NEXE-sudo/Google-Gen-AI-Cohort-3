@@ -24,7 +24,9 @@ describe("CI health metrics", () => {
 
   it("counts cancelled, timed out, and action required runs", () => {
     expect(
-      getCIHealthMetrics(runs("success", "cancelled", "timed_out", "action_required")),
+      getCIHealthMetrics(
+        runs("success", "cancelled", "timed_out", "action_required"),
+      ),
     ).toMatchObject({ health: "25%", failedRunCount: 3 });
   });
 
