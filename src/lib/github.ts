@@ -324,7 +324,7 @@ export async function fetchGitHubJobLogs(
   try {
     response = await fetchWithTimeout(
       `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}/logs`,
-      { headers: { ...githubHeaders(token), Accept: "text/plain" } },
+      { headers: githubHeaders(token) },
     );
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {

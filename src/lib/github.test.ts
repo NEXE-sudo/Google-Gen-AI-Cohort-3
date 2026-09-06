@@ -116,6 +116,26 @@ describe("GitHub integration boundaries", () => {
     expect(normalizeWorkflowJob({ id: "invalid" })).toBeNull();
   });
 
+  it("retrieves job logs with GitHub's supported media type", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("Run tests failed", { status: 200 }),
+    );
+
+    const { fetchGitHubJobLogs } = await import("./github");
+    await expect(
+      fetchGitHubJobLogs("server-token", "acme", "app", 123),
+    ).resolves.toBe("Run tests failed");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://api.github.com/repos/acme/app/actions/jobs/123/logs",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer server-token",
+          Accept: "application/vnd.github+json",
+        }),
+      }),
+    );
+  });
+
   it("round-trips encrypted GitHub tokens without exposing plaintext", () => {
     process.env.GITHUB_TOKEN_ENCRYPTION_KEY = "test-encryption-key";
     const encrypted = encryptGitHubToken("ghp_test_token");
