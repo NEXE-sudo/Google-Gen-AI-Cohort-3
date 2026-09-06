@@ -15,7 +15,7 @@ export function resolveSelectedProjectId(
     return currentSelection;
   }
 
-  return null;
+  return projects[0].id;
 }
 
 export function readSelectedProjectId(

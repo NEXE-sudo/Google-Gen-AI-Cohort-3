@@ -166,6 +166,9 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
       const requestId = ++requestIdRef.current;
       setLiveLoading(true);
       setLiveError(null);
+      setLiveIncidents([]);
+      setLiveMemory([]);
+      setLiveWorkflowRuns([]);
       try {
         const token = await currentUser.getIdToken();
         const headers = { Authorization: `Bearer ${token}` };
@@ -201,12 +204,18 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
           return;
         }
 
-        const [incidentsResponse, memoryResponse] = await Promise.all([
-          fetch(`/api/projects/${project.id}/incidents`, { headers }),
-          fetch(`/api/projects/${project.id}/memory`, { headers }),
-        ]);
+        const [incidentsResponse, memoryResponse, workflowRunsResponse] =
+          await Promise.all([
+            fetch(`/api/projects/${project.id}/incidents`, { headers }),
+            fetch(`/api/projects/${project.id}/memory`, { headers }),
+            fetch(`/api/projects/${project.id}/workflow-runs`, { headers }),
+          ]);
 
-        if (!incidentsResponse.ok || !memoryResponse.ok) {
+        if (
+          !incidentsResponse.ok ||
+          !memoryResponse.ok ||
+          !workflowRunsResponse.ok
+        ) {
           throw new Error("Unable to load project intelligence.");
         }
 
@@ -216,11 +225,15 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
         const memoryPayload = (await memoryResponse.json()) as {
           memory?: LiveMemory[];
         };
+        const workflowRunsPayload = (await workflowRunsResponse.json()) as {
+          workflowRuns?: LiveWorkflowRun[];
+        };
 
         if (requestId !== requestIdRef.current || cancelled) return;
 
         setLiveIncidents(incidentsPayload.incidents || []);
         setLiveMemory(memoryPayload.memory || []);
+        setLiveWorkflowRuns(workflowRunsPayload.workflowRuns || []);
       } catch (error) {
         if (!cancelled && requestId === requestIdRef.current) {
           setLiveError(
@@ -324,7 +337,16 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
             }),
           },
         );
-        if (!response.ok) throw new Error("Incident creation failed.");
+        const payload = (await response.json().catch(() => ({}))) as {
+          incident?: LiveIncident;
+          error?: string;
+        };
+        if (!response.ok) {
+          throw new Error(payload.error || "Incident creation failed.");
+        }
+        if (payload.incident) {
+          setLiveIncidents((incidents) => [payload.incident!, ...incidents]);
+        }
         setIncidentNotice("Incident created and persisted in Firestore.");
         return;
       } catch (error) {

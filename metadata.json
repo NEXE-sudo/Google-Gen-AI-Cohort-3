@@ -1,6 +1,6 @@
 {
-  "name": "Gemini Journal & Reflections",
-  "description": "A private, authenticated reflection journal with Gemini AI conversational insights and user-isolated Firestore storage.",
+  "name": "Trace",
+  "description": "Your Github AI assistant for code review, issue triage, and workflow automation.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

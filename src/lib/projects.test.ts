@@ -61,16 +61,69 @@ describe("project access model", () => {
     expect(canAccessProject(project, "priya", "delete")).toBe(false);
   });
 
-  it("keeps a valid persisted project selection and requires an explicit choice when nothing is selected", () => {
+  it("selects the first project when there is no valid persisted selection", () => {
     const projects = [
       { id: "proj_a", name: "A" },
       { id: "proj_b", name: "B" },
     ] as any[];
 
     expect(resolveSelectedProjectId(projects, "proj_b")).toBe("proj_b");
-    expect(resolveSelectedProjectId(projects, "missing")).toBeNull();
-    expect(resolveSelectedProjectId(projects, null)).toBeNull();
+    expect(resolveSelectedProjectId(projects, "missing")).toBe("proj_a");
+    expect(resolveSelectedProjectId(projects, null)).toBe("proj_a");
     expect(resolveSelectedProjectId([], "proj_a")).toBeNull();
+  });
+
+  it("preserves project-scoped data while switching and refreshing selection", () => {
+    const projects = [{ id: "proj_a" }, { id: "proj_b" }];
+    const projectData = new Map([
+      [
+        "proj_a",
+        {
+          incidents: ["incident-a"],
+          memory: ["memory-a"],
+          workflowRuns: ["run-a"],
+        },
+      ],
+      [
+        "proj_b",
+        {
+          incidents: ["incident-b"],
+          memory: ["memory-b"],
+          workflowRuns: ["run-b"],
+        },
+      ],
+    ]);
+
+    const selectedAfterSwitch = resolveSelectedProjectId(projects, "proj_b");
+    const selectedAfterRefresh = resolveSelectedProjectId(
+      projects,
+      selectedAfterSwitch,
+    );
+
+    expect(selectedAfterSwitch).toBe("proj_b");
+    expect(projectData.get(selectedAfterSwitch)?.incidents).toEqual([
+      "incident-b",
+    ]);
+    expect(projectData.get(selectedAfterSwitch)?.memory).toEqual(["memory-b"]);
+    expect(projectData.get(selectedAfterSwitch)?.workflowRuns).toEqual([
+      "run-b",
+    ]);
+    expect(projectData.get("proj_a")).toEqual({
+      incidents: ["incident-a"],
+      memory: ["memory-a"],
+      workflowRuns: ["run-a"],
+    });
+    expect(selectedAfterRefresh).toBe("proj_b");
+  });
+
+  it("selects another project after deletion and clears the final selection", () => {
+    const projects = [{ id: "proj_a" }, { id: "proj_b" }];
+    const remainingProjects = projects.filter(
+      (project) => project.id !== "proj_b",
+    );
+
+    expect(resolveSelectedProjectId(remainingProjects, null)).toBe("proj_a");
+    expect(resolveSelectedProjectId([], null)).toBeNull();
   });
 
   it("persists and reads selected project IDs with a namespaced localStorage key", () => {

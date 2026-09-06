@@ -164,16 +164,26 @@ export async function createIncident(args: {
     status: "Open",
     summary: args.summary.trim(),
     source: args.source.trim() || "manual",
-    rootCause: args.rootCause?.trim() || undefined,
-    confidence: args.confidence,
-    evidence: args.evidence?.slice(0, 20),
-    affectedComponents: args.affectedComponents?.slice(0, 20),
-    relatedCommits: args.relatedCommits?.slice(0, 20),
-    relatedPullRequests: args.relatedPullRequests?.slice(0, 20),
-    recommendedActions: args.recommendedActions?.slice(0, 20),
     createdAt: timestamp,
     updatedAt: timestamp,
   };
+
+  const rootCause = args.rootCause?.trim();
+  if (rootCause) incident.rootCause = rootCause;
+  if (args.confidence) incident.confidence = args.confidence;
+  if (args.evidence) incident.evidence = args.evidence.slice(0, 20);
+  if (args.affectedComponents) {
+    incident.affectedComponents = args.affectedComponents.slice(0, 20);
+  }
+  if (args.relatedCommits) {
+    incident.relatedCommits = args.relatedCommits.slice(0, 20);
+  }
+  if (args.relatedPullRequests) {
+    incident.relatedPullRequests = args.relatedPullRequests.slice(0, 20);
+  }
+  if (args.recommendedActions) {
+    incident.recommendedActions = args.recommendedActions.slice(0, 20);
+  }
 
   if (!incident.title || !incident.summary) {
     throw new Error("Incident title and summary are required.");
@@ -274,6 +284,16 @@ export async function listMemory(projectId: string) {
     .collection("engineeringMemory")
     .orderBy("createdAt", "desc")
     .limit(100)
+    .get();
+  return snapshot.docs.map((document) => document.data());
+}
+
+export async function listWorkflowRuns(projectId: string) {
+  const snapshot = await projectCollection()
+    .doc(projectId)
+    .collection("workflowRuns")
+    .orderBy("syncedAt", "desc")
+    .limit(50)
     .get();
   return snapshot.docs.map((document) => document.data());
 }

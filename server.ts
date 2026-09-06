@@ -28,6 +28,7 @@ import {
   getIncident,
   listIncidents,
   listMemory,
+  listWorkflowRuns,
   listProjectsForUser,
   projectHasPermission,
   saveRepositorySync,
@@ -382,6 +383,28 @@ app.get(
     } catch (error) {
       console.error("[API Error] GET project incidents:", error);
       res.status(500).json({ error: "Unable to load project incidents." });
+    }
+  },
+);
+
+app.get(
+  "/api/projects/:projectId/workflow-runs",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const user = getAuthenticatedUser(req);
+      const project = await getProject(req.params.projectId);
+      if (!project || !projectHasPermission(project, user.uid, "read")) {
+        res.status(404).json({ error: "Project not found." });
+        return;
+      }
+      res.json({
+        workflowRuns: await listWorkflowRuns(project.id),
+        mode: "live",
+      });
+    } catch (error) {
+      console.error("[API Error] GET project workflow runs:", error);
+      res.status(500).json({ error: "Unable to load project workflow runs." });
     }
   },
 );
