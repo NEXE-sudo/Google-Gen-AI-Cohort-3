@@ -1,66 +1,83 @@
 # Trace implementation plan
 
-## Phase 1 — refactor the starter app to Trace
+## Current repository status
 
-- Replace the journal branding and landing experience with a developer-tool dashboard.
-- Keep the existing Firebase auth foundation while renaming the product to Trace.
-- Preserve working Gemini server proxy and Firestore helpers where they map to the new product.
+The repository already contains a functional Trace prototype with:
 
-## Phase 2 — dashboard, project model and Firestore schema
+- Firebase Authentication flow and a protected landing screen
+- a Trace dashboard and demo-mode UI
+- a Google Gemini proxy for legacy reflection use
+- a basic security utility layer with prompt injection and secret redaction helpers
+- demo engineering data and a Cloud Run-friendly Express server
+- a first-pass Firestore rules baseline
+- a basic test setup with security utility validation
 
-- Add a secure dashboard layout with overview, projects, incidents, CI/CD, security, memory, AI assistant, and settings views.
-- Define core entities: projects, repositories, incidents, workflowRuns, securityFindings, engineeringMemory, and chatSessions.
-- Document explicit ownership and membership fields so data is scoped by authenticated user identity.
+The app is no longer the original journal starter, but it is still a vertical-slice prototype rather than a complete production Trace platform.
 
-## Phase 3 — GitHub repository connection and retrieval
+## Implemented in this repository
 
-- Add a GitHub service abstraction with repository metadata, branch, commit, PR, issue, and workflow retrieval boundaries.
-- Keep the integration behind a server-side boundary and expose only approved data to the client.
-- Add clear configuration and error handling for missing credentials or API failures.
+### Phase 1 — app refactor and product identity
 
-## Phase 4 — CI/CD intelligence
+- Trace branding and dashboard have been introduced in the UI.
+- The app now presents a developer-focused product story rather than the personal journal experience.
+- Firebase auth remains the authentication source.
 
-- Build a workflow status view with failure analysis and Gemini review support.
-- Add structured analysis outputs for summary, likely root cause, evidence, confidence, related commit/PR, fix, and next steps.
+### Phase 2 — demo product experience
 
-## Phase 5 — incidents and root-cause analysis
+- Demo-project dashboard data is available and clearly labelled as synthetic.
+- Overview, incidents, CI/CD, security, memory, AI assistant, and settings screens are present in the UI.
 
-- Add incident creation and lifecycle management.
-- Correlate commits, PRs, workflow failures, issues, and previous incidents into a structured investigation summary.
+### Phase 3 — backend safety scaffolding
 
-## Phase 6 — engineering memory
+- Cloud Run-compatible port handling is now enforced in the server.
+- GitHub signature validation logic has been tightened to reject invalid/malformed signatures safely.
+- Prompt injection checks exist as a first defensive layer.
 
-- Store resolved incident lessons in a searchable memory store.
-- Allow server-side retrieval of relevant memory before AI responses.
+### Phase 4 — analysis surface
 
-## Phase 7 — AI Security Review
+- A real failure-analysis endpoint exists to return either Gemini-backed or deterministic demo results.
+- The backend checks malformed inputs and returns structured results instead of hidden failures.
 
-- Add security findings with severity, category, evidence, affected resource, recommendation, and status.
-- Distinguish evidence from inference and avoid claiming the application is secure based on no findings.
+### Phase 5 — verification
 
-## Phase 8 — RBAC and audit logging
+- Type-checking, build validation, and test execution are active in the repo.
 
-- Enforce owner/admin/member/viewer permissions server-side and in Firestore rules.
-- Record security-sensitive changes with actor, action, resource, timestamp, result, and metadata.
+## Remaining work for a full production-quality Trace
 
-## Phase 9 — secure AI assistant
+1. Real Firebase project and Firestore persistence for users/projects/incidents/security and memory
+2. Server-side RBAC enforcement tied to Firestore project roles
+3. Real GitHub OAuth/token flow and repository sync service
+4. Workflow-run and job-log ingestion with bounded retention and redaction
+5. Persisted incident creation/update/resolution with audit logs
+6. Secure AI assistant grounded in selected project context only
+7. Full webhook ingestion with idempotency, repository mapping, and project membership enforcement
+8. Real security review and repository scanning logic
+9. Stronger README claims and deployment documentation for production-only features
 
-- Build a context-aware assistant that only uses selected project data retrieved server-side.
-- Reject prompt injection attempts and keep user-supplied repo content untrusted.
+## Immediate implementation priority
 
-## Phase 10 — demo mode
+1. Fix architecture/runtime issues and keep the app runnable.
+2. Make Firebase auth + Firestore persistence real.
+3. Make GitHub repository synchronisation real.
+4. Make CI/CD data real.
+5. Make Gemini root-cause analysis real.
+6. Make incidents persistent and connected to analysis.
+7. Make engineering memory persistent and searchable.
+8. Implement RBAC and server-side authorisation.
+9. Implement audit logging.
+10. Implement security review.
+11. Implement secure context-aware AI assistant.
+12. Implement webhook ingestion and idempotency.
+13. Expand tests.
+14. Final README and security review.
 
-- Add a clearly marked synthetic data demo project that demonstrates incidents, CI/CD failures, memory, and AI analysis.
+## Current status summary
 
-## Phase 11 — testing
-
-- Add backend tests covering auth boundaries, Firestore access, RBAC, webhook validation, idempotency, malformed inputs, and Gemini error handling.
-
-## Phase 12 — security review and Cloud Run polish
-
-- Perform a final review of security assumptions, deployment requirements, and error handling.
-- Prepare the app for Cloud Run with environment variable conventions and production-safe server setup.
-
-## Phase 13 — final README and deployment docs
-
-- Document product overview, architecture, local setup, Firebase rules, GitHub integration, Secret Manager, Cloud Run deployment, demo mode, and testing.
+- Implemented foundation: Yes
+- Demo product experience: Yes
+- Real GitHub integration: Not yet complete
+- Real Firestore project model: Not yet complete
+- Real RBAC/audit enforcement: Not yet complete
+- Real incident system: In progress
+- Real AI analysis pipeline: Backed by a structured endpoint but still needs stronger validation and persisted context
+- Production deploy readiness: Partial

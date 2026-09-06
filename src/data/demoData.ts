@@ -11,12 +11,17 @@ export type DemoTab =
 export const demoProject = {
   id: "proj_trace_demo",
   name: "Northstar Payments",
-  ownerId: "demo-owner",
+  ownerId: "alice",
   status: "Healthy but trending risky",
   repository: "github.com/northstar/payments-service",
   branches: ["main", "release-2026.09", "hotfix/auth-flow"],
-  members: ["Alicia", "Marcus", "Priya"],
-  lastUpdated: "2026-09-06T14:20:00.000Z",
+  members: [
+    { uid: "alice", role: "owner" },
+    { uid: "marcus", role: "member" },
+    { uid: "priya", role: "viewer" },
+  ],
+  createdAt: "2026-09-01T00:00:00.000Z",
+  updatedAt: "2026-09-06T14:20:00.000Z",
 };
 
 export const demoOverview = {
@@ -33,28 +38,44 @@ export const demoOverview = {
 
 export const demoProjects = [
   {
+    id: "proj_trace_demo",
     name: "Northstar Payments",
-    owner: "Platform",
-    repo: "payments-service",
+    ownerId: "alice",
+    repository: "github.com/northstar/payments-service",
     status: "Monitoring",
-    health: "Stable",
-    lastDeploy: "2 hours ago",
+    members: [
+      { uid: "alice", role: "owner" },
+      { uid: "marcus", role: "member" },
+      { uid: "priya", role: "viewer" },
+    ],
+    createdAt: "2026-09-01T00:00:00.000Z",
+    updatedAt: "2026-09-06T14:20:00.000Z",
   },
   {
+    id: "proj_console_demo",
     name: "Customer Console",
-    owner: "Web",
-    repo: "console-web",
+    ownerId: "web-team",
+    repository: "github.com/northstar/console-web",
     status: "Healthy",
-    health: "Green",
-    lastDeploy: "1 day ago",
+    members: [
+      { uid: "web-team", role: "owner" },
+      { uid: "marcus", role: "member" },
+    ],
+    createdAt: "2026-09-02T00:00:00.000Z",
+    updatedAt: "2026-09-05T16:00:00.000Z",
   },
   {
+    id: "proj_ai_ops_demo",
     name: "AI Operations",
-    owner: "ML",
-    repo: "ops-agent",
+    ownerId: "ml-team",
+    repository: "github.com/northstar/ops-agent",
     status: "At risk",
-    health: "Amber",
-    lastDeploy: "6 hours ago",
+    members: [
+      { uid: "ml-team", role: "owner" },
+      { uid: "priya", role: "member" },
+    ],
+    createdAt: "2026-09-03T00:00:00.000Z",
+    updatedAt: "2026-09-06T09:00:00.000Z",
   },
 ];
 

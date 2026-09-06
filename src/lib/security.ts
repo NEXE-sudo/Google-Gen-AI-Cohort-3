@@ -99,7 +99,10 @@ export function validateGitHubWebhookSignature({
   signature: string | undefined;
   secret: string;
 }): boolean {
-  if (!signature) return false;
+  if (!signature || !secret) return false;
+
+  const normalizedSignature = signature.trim();
+  if (!normalizedSignature.startsWith("sha256=")) return false;
 
   const crypto = require("node:crypto");
   const expected = `sha256=${crypto
@@ -107,10 +110,14 @@ export function validateGitHubWebhookSignature({
     .update(payload)
     .digest("hex")}`;
 
-  return crypto.timingSafeEqual(
-    Buffer.from(expected, "utf8"),
-    Buffer.from(signature, "utf8"),
-  );
+  const expectedBuffer = Buffer.from(expected, "utf8");
+  const providedBuffer = Buffer.from(normalizedSignature, "utf8");
+
+  if (expectedBuffer.length !== providedBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(expectedBuffer, providedBuffer);
 }
 
 export function normalizeExternalText(input: string): string {

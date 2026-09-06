@@ -27,6 +27,7 @@ import {
   demoSettings,
   type DemoTab,
 } from "../data/demoData";
+import { createIncident, listVisibleProjects } from "../lib/projectStore";
 
 const navItems: Array<{
   key: DemoTab;
@@ -71,6 +72,12 @@ function formatDate(iso: string) {
 export function TraceDashboard() {
   const [activeTab, setActiveTab] = useState<DemoTab>("overview");
   const [query, setQuery] = useState("");
+  const [incidentNotice, setIncidentNotice] = useState<string | null>(null);
+
+  const visibleProjects = useMemo(
+    () => listVisibleProjects(demoProjects, "alice"),
+    [],
+  );
 
   const filteredMemory = useMemo(() => {
     const phrase = query.trim().toLowerCase();
@@ -81,6 +88,27 @@ export function TraceDashboard() {
       return text.includes(phrase);
     });
   }, [query]);
+
+  const handleCreateIncident = () => {
+    const newIncident = createIncident(demoProject, "alice", {
+      title: "AI assistant misread workflow logs",
+      severity: "High",
+      summary:
+        "The latest incident review suggests the assistant interpreted stale logs as new evidence.",
+      source: "trace-ai-assistant",
+    });
+
+    if (newIncident) {
+      setIncidentNotice(
+        `Incident created: ${newIncident.title} (${newIncident.status})`,
+      );
+      return;
+    }
+
+    setIncidentNotice(
+      "You do not have permission to create an incident in this project.",
+    );
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -162,12 +190,21 @@ export function TraceDashboard() {
                 <Bell className="h-4 w-4 text-cyan-300" />
                 Alerts
               </button>
-              <button className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950">
+              <button
+                onClick={handleCreateIncident}
+                className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950"
+              >
                 <Activity className="h-4 w-4" />
                 Create incident
               </button>
             </div>
           </header>
+
+          {incidentNotice && (
+            <div className="mb-4 rounded-xl border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-200">
+              {incidentNotice}
+            </div>
+          )}
 
           {activeTab === "overview" && (
             <div className="space-y-6">
@@ -249,13 +286,13 @@ export function TraceDashboard() {
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-lg font-semibold text-white">Projects</h2>
                 <span className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                  3 connected
+                  {visibleProjects.length} connected
                 </span>
               </div>
               <div className="space-y-3">
-                {demoProjects.map((project) => (
+                {visibleProjects.map((project) => (
                   <div
-                    key={project.name}
+                    key={project.id}
                     className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-950/70 p-4 md:flex-row md:items-center md:justify-between"
                   >
                     <div>
@@ -263,20 +300,17 @@ export function TraceDashboard() {
                         {project.name}
                       </div>
                       <div className="text-sm text-slate-400">
-                        {project.owner} • {project.repo}
+                        {project.repository}
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
                       <span
-                        className={`rounded-full px-2.5 py-1 text-xs ${statusClasses[project.status]}`}
+                        className={`rounded-full px-2.5 py-1 text-xs ${statusClasses[project.status] || "bg-slate-700 text-slate-200"}`}
                       >
                         {project.status}
                       </span>
                       <span className="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-300">
-                        {project.health}
-                      </span>
-                      <span className="text-xs text-slate-400">
-                        Last deploy: {project.lastDeploy}
+                        Members: {project.members.length}
                       </span>
                     </div>
                   </div>

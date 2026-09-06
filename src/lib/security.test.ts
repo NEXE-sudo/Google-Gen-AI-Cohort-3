@@ -3,6 +3,7 @@ import {
   canPerformAction,
   createAuditEvent,
   normalizeExternalText,
+  validateGitHubWebhookSignature,
   validatePromptInjection,
 } from "./security";
 
@@ -33,5 +34,30 @@ describe("security utilities", () => {
 
   it("normalizes external text to a safe string", () => {
     expect(normalizeExternalText("  hello   world  ")).toBe("hello world");
+  });
+
+  it("accepts a valid GitHub webhook signature and rejects malformed signatures", () => {
+    const secret = "trace-secret";
+    const payload = JSON.stringify({ action: "opened", number: 42 });
+    const crypto = require("node:crypto");
+    const validSignature = `sha256=${crypto
+      .createHmac("sha256", secret)
+      .update(payload)
+      .digest("hex")}`;
+
+    expect(
+      validateGitHubWebhookSignature({
+        payload,
+        signature: validSignature,
+        secret,
+      }),
+    ).toBe(true);
+    expect(
+      validateGitHubWebhookSignature({
+        payload,
+        signature: "sha256=bad",
+        secret,
+      }),
+    ).toBe(false);
   });
 });
