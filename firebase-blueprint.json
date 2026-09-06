@@ -1,0 +1,55 @@
+{
+  "entities": {
+    "Reflection": {
+      "title": "Reflection",
+      "description": "A user-isolated reflection journal entry and Gemini conversation history",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique reflection document identifier"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Firebase Authentication UID of the owner"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Title of the journal reflection"
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 50,
+          "description": "Category: reflection, brainstorm, summary, gratitude, or general"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "AI-generated executive summary or key takeaway"
+        },
+        "messages": {
+          "type": "array",
+          "description": "List of conversation turns between user and Gemini"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last updated timestamp"
+        }
+      },
+      "required": ["id", "userId", "title", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/reflections/{reflectionId}": {
+      "schema": "Reflection",
+      "description": "User-isolated reflections and conversation history"
+    }
+  }
+}
