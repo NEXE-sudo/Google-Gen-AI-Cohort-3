@@ -47,6 +47,7 @@ import {
   validateFailureAnalysis,
 } from "./src/server/geminiRca";
 import {
+  fetchGitHubWorkflowJobs,
   fetchGitHubJobLogs,
   fetchGitHubRepositorySummary,
   fetchGitHubWorkflowRuns,
@@ -863,6 +864,50 @@ app.post(
           error instanceof GitHubApiError
             ? error.message
             : "GitHub repository synchronization failed.",
+      });
+    }
+  },
+);
+
+app.get(
+  "/api/projects/:projectId/github/runs/:runId/jobs",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const user = getAuthenticatedUser(req);
+      const project = await getProject(req.params.projectId);
+      if (!project || !projectHasPermission(project, user.uid, "read")) {
+        res.status(404).json({ error: "Project not found." });
+        return;
+      }
+      const connection = await loadGitHubConnection(project.id);
+      if (!connection) {
+        res
+          .status(409)
+          .json({ error: "GitHub is not connected to this project." });
+        return;
+      }
+      const { owner, repo } = parseGitHubRepository(project.repository);
+      const jobs = await fetchGitHubWorkflowJobs(
+        connection.accessToken,
+        owner,
+        repo,
+        Number(req.params.runId),
+      );
+      res.json({ jobs, mode: "live" });
+    } catch (error) {
+      console.error("[API Error] GitHub workflow jobs:", error);
+      const status =
+        error instanceof GitHubApiError
+          ? [401, 403, 404, 504].includes(error.status)
+            ? error.status
+            : 502
+          : 502;
+      res.status(status).json({
+        error:
+          error instanceof GitHubApiError
+            ? error.message
+            : "GitHub workflow jobs could not be retrieved.",
       });
     }
   },

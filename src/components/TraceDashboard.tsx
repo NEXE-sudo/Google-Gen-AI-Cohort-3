@@ -32,6 +32,10 @@ import {
 import { createIncident, listVisibleProjects } from "../lib/projectStore";
 import { getCIHealthMetrics } from "../lib/ciHealth";
 import {
+  selectFailedWorkflowJob,
+  selectProblematicWorkflowRun,
+} from "../lib/workflowAnalysis";
+import {
   readSelectedProjectId,
   resolveSelectedProjectId,
   writeSelectedProjectId,
@@ -125,6 +129,37 @@ type LiveWorkflowRun = {
   url: string | null;
 };
 
+type LiveWorkflowJob = {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  html_url: string;
+};
+
+type FailureAnalysis = {
+  summary: string;
+  likelyRootCause: string;
+  confidence: "High" | "Medium" | "Low";
+  evidence: string[];
+  affectedComponents: string[];
+  relatedCommits: string[];
+  relatedPullRequests: string[];
+  recommendedActions: string[];
+  uncertainty: string;
+};
+
+type RcaState = {
+  projectId: string;
+  workflowRunId: number;
+  job: LiveWorkflowJob;
+  workflow: LiveWorkflowRun;
+  logs: string;
+  analysis: FailureAnalysis;
+};
+
 export function TraceDashboard({ currentUser }: { currentUser: User }) {
   const [activeTab, setActiveTab] = useState<DemoTab>("overview");
   const [query, setQuery] = useState("");
@@ -145,6 +180,11 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
   const [projectPendingDeletion, setProjectPendingDeletion] =
     useState<LiveProject | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [rcaState, setRcaState] = useState<RcaState | null>(null);
+  const [rcaStage, setRcaStage] = useState<string | null>(null);
+  const [rcaError, setRcaError] = useState<string | null>(null);
+  const [rcaLogsOpen, setRcaLogsOpen] = useState(false);
+  const [incidentCreating, setIncidentCreating] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
@@ -167,6 +207,13 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
       return next;
     });
   }, [isDemoMode]);
+
+  useEffect(() => {
+    setRcaState(null);
+    setRcaStage(null);
+    setRcaError(null);
+    setRcaLogsOpen(false);
+  }, [selectedProjectId]);
 
   useEffect(() => {
     if (isDemoMode) {
@@ -579,6 +626,161 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
           ? error.message
           : "Repository synchronization failed.",
       );
+    }
+  };
+
+  const handleAnalyseWorkflow = async () => {
+    if (isDemoMode) {
+      setRcaError("Workflow analysis uses live GitHub and Gemini data only.");
+      return;
+    }
+    if (!activeProject || !selectedProjectId) {
+      setRcaError("Select an authorised project before analysing a workflow.");
+      return;
+    }
+
+    const workflow = selectProblematicWorkflowRun<LiveWorkflowRun>(
+      liveWorkflowRuns,
+    );
+    if (!workflow) {
+      setRcaError("No failed workflow run is available for analysis.");
+      return;
+    }
+
+    const projectId = selectedProjectId;
+    setRcaState(null);
+    setRcaError(null);
+    setRcaStage("Fetching failed job...");
+
+    try {
+      const token = await currentUser.getIdToken();
+      const headers = { Authorization: `Bearer ${token}` };
+      const jobsResponse = await fetch(
+        `/api/projects/${projectId}/github/runs/${workflow.id}/jobs`,
+        { headers },
+      );
+      const jobsPayload = (await jobsResponse.json().catch(() => ({}))) as {
+        jobs?: LiveWorkflowJob[];
+        error?: string;
+      };
+      if (!jobsResponse.ok) {
+        throw new Error(jobsPayload.error || "Failed job could not be retrieved.");
+      }
+
+      const failedJob = selectFailedWorkflowJob<LiveWorkflowJob>(
+        jobsPayload.jobs || [],
+      );
+      if (!failedJob) {
+        throw new Error("No failed job is available for this workflow run.");
+      }
+
+      setRcaStage("Reading failure logs...");
+      const logsResponse = await fetch(
+        `/api/projects/${projectId}/github/runs/${workflow.id}/jobs/${failedJob.id}/logs`,
+        { headers },
+      );
+      const logsPayload = (await logsResponse.json().catch(() => ({}))) as {
+        logs?: string;
+        error?: string;
+      };
+      if (!logsResponse.ok || typeof logsPayload.logs !== "string") {
+        throw new Error(logsPayload.error || "Failure logs could not be retrieved.");
+      }
+
+      setRcaStage("Analysing with Gemini...");
+      const analysisResponse = await fetch("/api/ai/analyse-failure", {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          projectId,
+          workflow: workflow.name,
+          logs: logsPayload.logs,
+          branch: workflow.branch || "",
+          commit: workflow.commitSha,
+          repository: activeProject.repository,
+          recentCommits: workflow.commitSha ? [workflow.commitSha] : [],
+        }),
+      });
+      const analysisPayload = (await analysisResponse.json().catch(() => ({}))) as {
+        data?: FailureAnalysis;
+        error?: string;
+      };
+      if (!analysisResponse.ok || !analysisPayload.data) {
+        throw new Error(analysisPayload.error || "Gemini analysis failed.");
+      }
+
+      if (selectedProjectId !== projectId) return;
+      setRcaState({
+        projectId,
+        workflowRunId: workflow.id,
+        job: failedJob,
+        workflow,
+        logs: logsPayload.logs,
+        analysis: analysisPayload.data,
+      });
+    } catch (error) {
+      if (selectedProjectId === projectId) {
+        setRcaError(
+          error instanceof Error ? error.message : "Workflow analysis failed.",
+        );
+      }
+    } finally {
+      setRcaStage(null);
+    }
+  };
+
+  const handleCreateIncidentFromRca = async () => {
+    if (!rcaState || rcaState.projectId !== selectedProjectId) return;
+    setIncidentCreating(true);
+    setRcaError(null);
+    try {
+      const token = await currentUser.getIdToken();
+      const response = await fetch(
+        `/api/projects/${rcaState.projectId}/incidents`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            title: `${rcaState.workflow.name} workflow failure`,
+            severity:
+              rcaState.analysis.confidence === "High"
+                ? "High"
+                : rcaState.analysis.confidence === "Low"
+                  ? "Low"
+                  : "Medium",
+            summary: rcaState.analysis.summary,
+            source: "GitHub/Gemini analysis",
+            rootCause: rcaState.analysis.likelyRootCause,
+            confidence: rcaState.analysis.confidence,
+            evidence: rcaState.analysis.evidence,
+            affectedComponents: rcaState.analysis.affectedComponents,
+            relatedCommits: rcaState.analysis.relatedCommits,
+            relatedPullRequests: rcaState.analysis.relatedPullRequests,
+            recommendedActions: rcaState.analysis.recommendedActions,
+          }),
+        },
+      );
+      const payload = (await response.json().catch(() => ({}))) as {
+        incident?: LiveIncident;
+        error?: string;
+      };
+      if (!response.ok || !payload.incident) {
+        throw new Error(payload.error || "Incident creation failed.");
+      }
+      setLiveIncidents((incidents) => [payload.incident!, ...incidents]);
+      setIncidentNotice("RCA persisted as a project incident.");
+    } catch (error) {
+      setRcaError(
+        error instanceof Error ? error.message : "Incident creation failed.",
+      );
+    } finally {
+      setIncidentCreating(false);
     }
   };
 
@@ -1013,7 +1215,6 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                       </div>
                       <div className="mt-2 text-sm text-slate-300">
                         {incident.relatedPullRequests?.length ||
-                        incident.relatedPullRequests?.length ||
                         incident.relatedCommits?.length
                           ? [
                               ...(incident.relatedPullRequests || []).map(
@@ -1036,10 +1237,103 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-lg font-semibold text-white">CI/CD</h2>
-                <button className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-2 text-xs uppercase tracking-[0.2em] text-cyan-300">
-                  Analyse with Gemini
+                <button
+                  onClick={() => void handleAnalyseWorkflow()}
+                  disabled={Boolean(rcaStage) || isDemoMode}
+                  className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-2 text-xs uppercase tracking-[0.2em] text-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {rcaStage || "Analyse with Gemini"}
                 </button>
               </div>
+              {rcaError && (
+                <div className="mb-4 rounded-xl border border-red-500/30 bg-red-950/30 p-3 text-sm text-red-200">
+                  {rcaError}
+                </div>
+              )}
+              {rcaState && rcaState.projectId === selectedProjectId && (
+                <div className="mb-4 space-y-4 rounded-xl border border-cyan-400/30 bg-slate-950/60 p-4">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.2em] text-cyan-300">
+                        Gemini analysis
+                      </div>
+                      <div className="mt-1 font-semibold text-white">
+                        {rcaState.workflow.name} • {rcaState.job.name}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        GitHub run {rcaState.workflowRunId} • {rcaState.workflow.branch || "unknown"} • {rcaState.workflow.commitSha.slice(0, 8) || "unknown"}
+                      </div>
+                    </div>
+                    <span className={`rounded-full px-2.5 py-1 text-xs ${statusClasses[rcaState.analysis.confidence]}`}>
+                      Confidence: {rcaState.analysis.confidence}
+                    </span>
+                  </div>
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                      Root cause
+                    </div>
+                    <p className="mt-1 text-sm leading-6 text-slate-200">
+                      {rcaState.analysis.likelyRootCause}
+                    </p>
+                    <p className="mt-2 text-sm leading-6 text-slate-300">
+                      {rcaState.analysis.summary}
+                    </p>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                        Evidence
+                      </div>
+                      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-300">
+                        {rcaState.analysis.evidence.length ?
+                          rcaState.analysis.evidence.map((evidence) => (
+                            <li key={evidence}>{evidence}</li>
+                          )) : <li>No matching evidence returned.</li>}
+                      </ul>
+                    </div>
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                        Recommended actions
+                      </div>
+                      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-300">
+                        {rcaState.analysis.recommendedActions.length ?
+                          rcaState.analysis.recommendedActions.map((action) => (
+                            <li key={action}>{action}</li>
+                          )) : <li>No recommended actions returned.</li>}
+                      </ul>
+                    </div>
+                  </div>
+                  <div className="grid gap-4 text-sm text-slate-300 md:grid-cols-3">
+                    <div>
+                      <span className="text-slate-500">Components:</span>{" "}
+                      {rcaState.analysis.affectedComponents.join(", ") || "Unavailable"}
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Commits:</span>{" "}
+                      {rcaState.analysis.relatedCommits.join(", ") || "Unavailable"}
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Pull requests:</span>{" "}
+                      {rcaState.analysis.relatedPullRequests.join(", ") || "Unavailable"}
+                    </div>
+                  </div>
+                  <details open={rcaLogsOpen} onToggle={(event) => setRcaLogsOpen(event.currentTarget.open)}>
+                    <summary className="cursor-pointer text-xs uppercase tracking-[0.2em] text-slate-400">
+                      GitHub job logs
+                    </summary>
+                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
+                      {rcaState.logs}
+                    </pre>
+                  </details>
+                  <button
+                    onClick={() => void handleCreateIncidentFromRca()}
+                    disabled={incidentCreating}
+                    className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950 disabled:opacity-50"
+                  >
+                    {incidentCreating ? "Creating incident..." : "Create incident"}
+                  </button>
+                </div>
+              )}
               <div className="space-y-3">
                 {workflowItems.map((run) => (
                   <div
