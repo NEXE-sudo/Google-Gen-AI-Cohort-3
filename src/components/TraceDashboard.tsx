@@ -343,8 +343,9 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
     : [
         {
           label: "Active incidents",
-          value: liveIncidents.filter((incident) => incident.status !== "Resolved")
-            .length,
+          value: liveIncidents.filter(
+            (incident) => incident.status !== "Resolved",
+          ).length,
         },
         { label: "Recent failures", value: failedRuns.length },
         {
@@ -375,7 +376,9 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
   const handleCreateIncident = async () => {
     if (!isDemoMode) {
       if (!activeProject) {
-        setIncidentNotice("Select an authorised project before creating an incident.");
+        setIncidentNotice(
+          "Select an authorised project before creating an incident.",
+        );
         return;
       }
       try {
@@ -479,16 +482,22 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
   };
 
   const handleConfirmDeleteProject = async () => {
-    if (!projectPendingDeletion || deleteConfirmation !== projectPendingDeletion.name) {
+    if (
+      !projectPendingDeletion ||
+      deleteConfirmation !== projectPendingDeletion.name
+    ) {
       return;
     }
 
     try {
       const token = await currentUser.getIdToken();
-      const response = await fetch(`/api/projects/${projectPendingDeletion.id}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const response = await fetch(
+        `/api/projects/${projectPendingDeletion.id}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
       const payload = (await response.json().catch(() => ({}))) as {
         error?: string;
       };
@@ -508,7 +517,9 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
         setLiveMemory([]);
         setLiveWorkflowRuns([]);
       }
-      setIncidentNotice(`Project “${projectPendingDeletion.name}” was deleted.`);
+      setIncidentNotice(
+        `Project “${projectPendingDeletion.name}” was deleted.`,
+      );
       setProjectPendingDeletion(null);
       setDeleteConfirmation("");
     } catch (error) {
@@ -732,15 +743,16 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                 Delete project &quot;{projectPendingDeletion.name}&quot;?
               </div>
               <p className="mt-2 text-red-200">
-                This permanently removes incidents, engineering memory,
-                workflow history, repository sync data, and GitHub connection
-                data.
+                This permanently removes incidents, engineering memory, workflow
+                history, repository sync data, and GitHub connection data.
               </p>
               <label className="mt-3 block text-xs text-red-200">
                 Type the project name to confirm.
                 <input
                   value={deleteConfirmation}
-                  onChange={(event) => setDeleteConfirmation(event.target.value)}
+                  onChange={(event) =>
+                    setDeleteConfirmation(event.target.value)
+                  }
                   className="mt-1 w-full rounded-lg border border-red-400/40 bg-slate-950 px-3 py-2 text-sm text-slate-100"
                   placeholder={projectPendingDeletion.name}
                 />
@@ -1003,18 +1015,17 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                       </div>
                       <div className="mt-2 text-sm text-slate-300">
                         {incident.relatedPullRequests?.length ||
-                        incident.relatedCommits?.length ? (
-                          [
-                            ...(incident.relatedPullRequests || []).map(
-                              (pullRequest) => `PR ${pullRequest}`,
-                            ),
-                            ...(incident.relatedCommits || []).map(
-                              (commit) => `Commit ${commit}`,
-                            ),
-                          ].join(" • ")
-                        ) : (
-                          "No related changes linked."
-                        )}
+                        incident.relatedPullRequests?.length ||
+                        incident.relatedCommits?.length
+                          ? [
+                              ...(incident.relatedPullRequests || []).map(
+                                (pullRequest) => `PR ${pullRequest}`,
+                              ),
+                              ...(incident.relatedCommits || []).map(
+                                (commit) => `Commit ${commit}`,
+                              ),
+                            ].join(" • ")
+                          : "No related changes linked."}
                       </div>
                     </div>
                   </div>
@@ -1232,30 +1243,30 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                 <div className="mt-4 space-y-3 text-sm text-slate-300">
                   <div className="flex items-center gap-3">
                     <GitCommitHorizontal className="h-4 w-4 text-cyan-300" />{" "}
-                    Recent commit: {isDemoMode
+                    Recent commit:{" "}
+                    {isDemoMode
                       ? workflowItems[0]?.commit || "Unavailable"
                       : liveWorkflowRuns[0]?.commitSha.slice(0, 8) ||
                         "Unavailable"}
                   </div>
                   <div className="flex items-center gap-3">
                     <Workflow className="h-4 w-4 text-cyan-300" /> Last failed
-                    workflow: {isDemoMode
+                    workflow:{" "}
+                    {isDemoMode
                       ? workflowItems[0]?.workflow || "Unavailable"
-                      : liveWorkflowRuns.find((run) =>
-                          failedRuns.includes(run),
-                        )?.name || "Unavailable"}
+                      : liveWorkflowRuns.find((run) => failedRuns.includes(run))
+                          ?.name || "Unavailable"}
                   </div>
                   <div className="flex items-center gap-3">
                     <AlertTriangle className="h-4 w-4 text-cyan-300" />{" "}
-                    Severity: {isDemoMode
+                    Severity:{" "}
+                    {isDemoMode
                       ? "High"
                       : liveIncidents[0]?.severity || "Unavailable"}
                   </div>
                   <div className="flex items-center gap-3">
                     <Shield className="h-4 w-4 text-cyan-300" /> Security
-                    posture: {isDemoMode
-                      ? "review recommended"
-                      : "Unavailable"}
+                    posture: {isDemoMode ? "review recommended" : "Unavailable"}
                   </div>
                 </div>
               </div>

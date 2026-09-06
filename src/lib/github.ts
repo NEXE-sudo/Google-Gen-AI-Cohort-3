@@ -64,8 +64,7 @@ export function normalizeWorkflowRun(
     id,
     name: typeof value.name === "string" ? value.name : "Unnamed workflow",
     status: typeof value.status === "string" ? value.status : "unknown",
-    conclusion:
-      typeof value.conclusion === "string" ? value.conclusion : null,
+    conclusion: typeof value.conclusion === "string" ? value.conclusion : null,
     branch:
       typeof value.head_branch === "string"
         ? value.head_branch
@@ -248,7 +247,9 @@ export async function fetchGitHubWorkflowRuns(
   );
   return (payload.workflow_runs || [])
     .slice(0, 50)
-    .map((run) => normalizeWorkflowRun(run as unknown as Record<string, unknown>))
+    .map((run) =>
+      normalizeWorkflowRun(run as unknown as Record<string, unknown>),
+    )
     .filter((run): run is PersistedWorkflowRun => run !== null);
 }
 
