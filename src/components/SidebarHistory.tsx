@@ -22,6 +22,33 @@ interface SidebarHistoryProps {
   loading: boolean;
 }
 
+export const matchesSessionSearch = (
+  session: Partial<ReflectionSession>,
+  rawSearchTerm: string,
+) => {
+  const searchTerm = rawSearchTerm.trim().toLowerCase();
+
+  if (!searchTerm) {
+    return true;
+  }
+
+  const title = typeof session.title === "string" ? session.title : "";
+  const summary = typeof session.summary === "string" ? session.summary : "";
+  const messageText = Array.isArray(session.messages)
+    ? session.messages
+        .map((message) =>
+          typeof message?.content === "string" ? message.content : "",
+        )
+        .join(" ")
+    : "";
+
+  return (
+    title.toLowerCase().includes(searchTerm) ||
+    summary.toLowerCase().includes(searchTerm) ||
+    messageText.toLowerCase().includes(searchTerm)
+  );
+};
+
 export const SidebarHistory: React.FC<SidebarHistoryProps> = ({
   sessions,
   activeSessionId,
@@ -34,10 +61,7 @@ export const SidebarHistory: React.FC<SidebarHistoryProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
 
   const filteredSessions = sessions.filter((session) => {
-    const matchesSearch =
-      session.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (session.summary && session.summary.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      session.messages.some((m) => m.content.toLowerCase().includes(searchTerm.toLowerCase()));
+    const matchesSearch = matchesSessionSearch(session, searchTerm);
 
     const matchesCategory =
       selectedCategory === "all" || session.category === selectedCategory;
@@ -99,19 +123,21 @@ export const SidebarHistory: React.FC<SidebarHistoryProps> = ({
 
         {/* Category Pills */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] font-medium no-scrollbar">
-          {["all", "reflection", "brainstorm", "gratitude", "summary"].map((cat) => (
-            <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
-              className={`px-2.5 py-1 rounded-md capitalize transition-colors whitespace-nowrap cursor-pointer text-xs ${
-                selectedCategory === cat
-                  ? "bg-[#c4a67a] text-[#0a0a0b] font-semibold"
-                  : "bg-[#1a1a1c] text-[#8a8a93] hover:text-[#e1e1e6] border border-[#2d2d30]"
-              }`}
-            >
-              {cat}
-            </button>
-          ))}
+          {["all", "reflection", "brainstorm", "gratitude", "summary"].map(
+            (cat) => (
+              <button
+                key={cat}
+                onClick={() => setSelectedCategory(cat)}
+                className={`px-2.5 py-1 rounded-md capitalize transition-colors whitespace-nowrap cursor-pointer text-xs ${
+                  selectedCategory === cat
+                    ? "bg-[#c4a67a] text-[#0a0a0b] font-semibold"
+                    : "bg-[#1a1a1c] text-[#8a8a93] hover:text-[#e1e1e6] border border-[#2d2d30]"
+                }`}
+              >
+                {cat}
+              </button>
+            ),
+          )}
         </div>
       </div>
 
@@ -127,7 +153,9 @@ export const SidebarHistory: React.FC<SidebarHistoryProps> = ({
             <div className="w-12 h-12 rounded-xl bg-[#1a1a1c] border border-[#2d2d30] flex items-center justify-center text-[#c4a67a] mx-auto mb-3 shadow-2xs">
               <BookOpen className="w-6 h-6" />
             </div>
-            <p className="text-sm font-serif italic text-[#e1e1e6]">No reflections found</p>
+            <p className="text-sm font-serif italic text-[#e1e1e6]">
+              No reflections found
+            </p>
             <p className="text-xs text-[#8a8a93] mt-1 max-w-[200px] mx-auto">
               {searchTerm
                 ? "Try a different search keyword."
@@ -178,7 +206,7 @@ export const SidebarHistory: React.FC<SidebarHistoryProps> = ({
                 <div className="flex items-center justify-between text-[10px] text-[#8a8a93]">
                   <span
                     className={`px-1.5 py-0.5 rounded-sm capitalize border text-[9px] uppercase tracking-wider ${getCategoryColor(
-                      session.category
+                      session.category,
                     )}`}
                   >
                     {session.category}
