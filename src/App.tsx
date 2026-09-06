@@ -45,5 +45,5 @@ export default function App() {
     return <LandingView />;
   }
 
-  return <TraceDashboard />;
+  return <TraceDashboard currentUser={currentUser} />;
 }

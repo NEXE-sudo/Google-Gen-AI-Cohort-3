@@ -1,21 +1,35 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isSignedIn() {
+    function signedIn() {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
+    function ownsUser(userId) {
+      return signedIn() && request.auth.uid == userId;
     }
 
-    function hasProjectPermission(projectId, permission) {
-      return isSignedIn() && exists(/databases/$(database)/documents/projects/$(projectId)) &&
-        get(/databases/$(database)/documents/projects/$(projectId)).data.members[request.auth.uid].role in ["owner", "admin", "member", "viewer"] &&
-        (
-          permission == "read" ||
-          get(/databases/$(database)/documents/projects/$(projectId)).data.members[request.auth.uid].role in ["owner", "admin", "member"]
-        );
+    function projectExists(projectId) {
+      return exists(/databases/$(database)/documents/projects/$(projectId));
+    }
+
+    function projectData(projectId) {
+      return get(/databases/$(database)/documents/projects/$(projectId)).data;
+    }
+
+    function isProjectMember(projectId) {
+      return signedIn() && projectExists(projectId) &&
+        request.auth.uid in projectData(projectId).members.keys();
+    }
+
+    function hasProjectRole(projectId, roles) {
+      return isProjectMember(projectId) &&
+        projectData(projectId).members[request.auth.uid].role in roles;
+    }
+
+    function isProjectOwner(projectId) {
+      return signedIn() && projectExists(projectId) &&
+        projectData(projectId).ownerId == request.auth.uid;
     }
 
     match /{document=**} {
@@ -23,64 +37,80 @@ service cloud.firestore {
     }
 
     match /test/connection {
-      allow read: if isSignedIn();
+      allow read: if signedIn();
     }
 
     match /users/{userId} {
-      allow read, update, delete: if isOwner(userId);
-      allow create: if isOwner(userId) && request.resource.data.ownerId == userId;
-    }
-
-    match /users/{userId}/projects/{projectId} {
-      allow read: if isOwner(userId);
-      allow create, update, delete: if isOwner(userId);
+      allow read, update, delete: if ownsUser(userId);
+      allow create: if ownsUser(userId) && request.resource.data.uid == userId;
     }
 
     match /projects/{projectId} {
-      allow read: if isSignedIn() && (
-        resource.data.ownerId == request.auth.uid ||
-        request.auth.uid in resource.data.members.keys()
-      );
+      allow read: if isProjectMember(projectId);
+      allow create: if signedIn() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.members.keys().size() == 1 &&
+        request.resource.data.members[request.auth.uid].role == "owner" &&
+        request.resource.data.memberUids.size() == 1 &&
+        request.resource.data.memberUids[0] == request.auth.uid;
+      allow update: if hasProjectRole(projectId, ["owner", "admin"]) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.members[resource.data.ownerId].role == "owner";
+      allow delete: if isProjectOwner(projectId);
+    }
 
-      allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
-
-      allow update, delete: if isSignedIn() && (
-        resource.data.ownerId == request.auth.uid ||
-        resource.data.members[request.auth.uid].role in ["owner", "admin"]
-      );
+    match /projects/{projectId}/members/{memberId} {
+      allow read: if isProjectMember(projectId);
+      allow create: if isProjectOwner(projectId) &&
+        memberId != projectData(projectId).ownerId &&
+        request.resource.data.role in ["admin", "member", "viewer"];
+      allow update: if isProjectOwner(projectId) &&
+        memberId != projectData(projectId).ownerId &&
+        request.resource.data.role in ["admin", "member", "viewer"];
+      allow delete: if isProjectOwner(projectId) &&
+        memberId != projectData(projectId).ownerId;
     }
 
     match /projects/{projectId}/incidents/{incidentId} {
-      allow read: if isSignedIn() && exists(/databases/$(database)/documents/projects/$(projectId)) && (
-        get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == request.auth.uid ||
-        request.auth.uid in get(/databases/$(database)/documents/projects/$(projectId)).data.members.keys()
-      );
-      allow create, update, delete: if isSignedIn() && exists(/databases/$(database)/documents/projects/$(projectId)) && (
-        get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == request.auth.uid ||
-        get(/databases/$(database)/documents/projects/$(projectId)).data.members[request.auth.uid].role in ["owner", "admin", "member"]
-      );
-    }
-
-    match /projects/{projectId}/securityFindings/{findingId} {
-      allow read, create, update, delete: if isSignedIn() && exists(/databases/$(database)/documents/projects/$(projectId)) && (
-        get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == request.auth.uid ||
-        get(/databases/$(database)/documents/projects/$(projectId)).data.members[request.auth.uid].role in ["owner", "admin", "member"]
-      );
+      allow read: if isProjectMember(projectId);
+      allow create: if hasProjectRole(projectId, ["owner", "admin", "member"]) &&
+        request.resource.data.projectId == projectId &&
+        request.resource.data.ownerId == request.auth.uid;
+      allow update: if hasProjectRole(projectId, ["owner", "admin", "member"]) &&
+        request.resource.data.projectId == resource.data.projectId &&
+        request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if hasProjectRole(projectId, ["owner", "admin"]);
     }
 
     match /projects/{projectId}/engineeringMemory/{memoryId} {
-      allow read: if isSignedIn() && exists(/databases/$(database)/documents/projects/$(projectId)) && (
-        get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == request.auth.uid ||
-        request.auth.uid in get(/databases/$(database)/documents/projects/$(projectId)).data.members.keys()
-      );
-      allow create, update, delete: if isSignedIn() && exists(/databases/$(database)/documents/projects/$(projectId)) && (
-        get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == request.auth.uid ||
-        get(/databases/$(database)/documents/projects/$(projectId)).data.members[request.auth.uid].role in ["owner", "admin", "member"]
-      );
+      allow read: if isProjectMember(projectId);
+      allow create, update, delete: if hasProjectRole(projectId, ["owner", "admin", "member"]) &&
+        request.resource.data.projectId == projectId;
+    }
+
+    match /projects/{projectId}/securityFindings/{findingId} {
+      allow read: if hasProjectRole(projectId, ["owner", "admin", "member"]);
+      allow create, update, delete: if hasProjectRole(projectId, ["owner", "admin"]);
+    }
+
+    match /projects/{projectId}/repositories/{repositoryId} {
+      allow read: if isProjectMember(projectId);
+      allow write: if false;
+    }
+
+    match /projects/{projectId}/workflowRuns/{runId} {
+      allow read: if isProjectMember(projectId);
+      allow write: if false;
+    }
+
+    match /projects/{projectId}/auditLogs/{auditId} {
+      allow read: if hasProjectRole(projectId, ["owner", "admin"]);
+      allow write: if false;
     }
 
     match /chatSessions/{sessionId} {
-      allow read, write: if isSignedIn() && request.auth.uid == resource.data.userId;
+      allow read, update, delete: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
     }
   }
 }

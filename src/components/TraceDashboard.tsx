@@ -1,4 +1,6 @@
 import React, { useMemo, useState } from "react";
+import { useEffect } from "react";
+import type { User } from "firebase/auth";
 import {
   Activity,
   AlertTriangle,
@@ -69,27 +71,210 @@ function formatDate(iso: string) {
   });
 }
 
-export function TraceDashboard() {
+type LiveProject = {
+  id: string;
+  name: string;
+  ownerId: string;
+  status: string;
+  repository: string;
+  members: Array<{ uid: string; role: string }>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type LiveIncident = {
+  id: string;
+  title: string;
+  severity: string;
+  status: string;
+  summary: string;
+  source: string;
+  createdAt: string;
+};
+
+type LiveMemory = {
+  id: string;
+  problem: string;
+  cause: string;
+  resolution: string;
+  summary: string;
+};
+
+type LiveWorkflowRun = {
+  id: number;
+  name: string;
+  conclusion: string | null;
+  status: string;
+  head_branch: string | null;
+  head_sha: string;
+  run_started_at: string;
+};
+
+export function TraceDashboard({ currentUser }: { currentUser: User }) {
   const [activeTab, setActiveTab] = useState<DemoTab>("overview");
   const [query, setQuery] = useState("");
   const [incidentNotice, setIncidentNotice] = useState<string | null>(null);
+  const [liveProjects, setLiveProjects] = useState<LiveProject[]>([]);
+  const [liveIncidents, setLiveIncidents] = useState<LiveIncident[]>([]);
+  const [liveMemory, setLiveMemory] = useState<LiveMemory[]>([]);
+  const [liveWorkflowRuns, setLiveWorkflowRuns] = useState<LiveWorkflowRun[]>(
+    [],
+  );
+  const [liveLoading, setLiveLoading] = useState(true);
+  const [liveError, setLiveError] = useState<string | null>(null);
+  const [projectName, setProjectName] = useState("");
+  const [projectRepository, setProjectRepository] = useState("");
+  const isDemoMode = import.meta.env.VITE_DEMO_MODE === "true";
+
+  useEffect(() => {
+    if (isDemoMode) {
+      setLiveLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const loadLiveData = async () => {
+      try {
+        const token = await currentUser.getIdToken();
+        const headers = { Authorization: `Bearer ${token}` };
+        const projectsResponse = await fetch("/api/projects", { headers });
+        if (!projectsResponse.ok)
+          throw new Error("Unable to load authorised projects.");
+        const projectsPayload = (await projectsResponse.json()) as {
+          projects?: LiveProject[];
+        };
+        const projects = projectsPayload.projects || [];
+        if (cancelled) return;
+        setLiveProjects(projects);
+        const project = projects[0];
+        if (project) {
+          const [incidentsResponse, memoryResponse] = await Promise.all([
+            fetch(`/api/projects/${project.id}/incidents`, { headers }),
+            fetch(`/api/projects/${project.id}/memory`, { headers }),
+          ]);
+          if (!incidentsResponse.ok || !memoryResponse.ok) {
+            throw new Error("Unable to load project intelligence.");
+          }
+          const incidentsPayload = (await incidentsResponse.json()) as {
+            incidents?: LiveIncident[];
+          };
+          const memoryPayload = (await memoryResponse.json()) as {
+            memory?: LiveMemory[];
+          };
+          if (!cancelled) {
+            setLiveIncidents(incidentsPayload.incidents || []);
+            setLiveMemory(memoryPayload.memory || []);
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLiveError(
+            error instanceof Error
+              ? error.message
+              : "Live data could not be loaded.",
+          );
+        }
+      } finally {
+        if (!cancelled) setLiveLoading(false);
+      }
+    };
+    void loadLiveData();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser, isDemoMode]);
+
+  const activeProject = isDemoMode ? demoProject : liveProjects[0];
+  const incidentItems = isDemoMode
+    ? demoIncidents
+    : liveIncidents.map((incident) => ({
+        title: incident.title,
+        severity: incident.severity,
+        status: incident.status,
+        detectedAt: incident.createdAt,
+        source: incident.source,
+        rootCause: incident.summary,
+      }));
+  const memoryItems = isDemoMode
+    ? demoMemory
+    : liveMemory.map((entry) => ({
+        problem: entry.problem,
+        rootCause: entry.cause,
+        resolution: entry.resolution,
+        lesson: entry.summary,
+      }));
+  const workflowItems = isDemoMode
+    ? demoCICD
+    : liveWorkflowRuns.map((run) => ({
+        workflow: run.name,
+        status: run.conclusion || run.status,
+        branch: run.head_branch || "unknown",
+        duration: "Unavailable",
+        commit: run.head_sha.slice(0, 8),
+        timestamp: run.run_started_at,
+      }));
+  const securityItems = isDemoMode ? demoSecurity : [];
+  const overviewCards = isDemoMode
+    ? [
+        { label: "Active incidents", value: demoOverview.activeIncidents },
+        { label: "Recent failures", value: demoOverview.failedWorkflows },
+        { label: "CI health", value: demoOverview.ciHealth },
+        { label: "Security findings", value: demoOverview.securityFindings },
+      ]
+    : [
+        { label: "Active incidents", value: liveIncidents.length },
+        { label: "Recent failures", value: "Unavailable" },
+        { label: "CI health", value: "Unavailable" },
+        { label: "Security findings", value: "Unavailable" },
+      ];
 
   const visibleProjects = useMemo(
-    () => listVisibleProjects(demoProjects, "alice"),
-    [],
+    () =>
+      isDemoMode ? listVisibleProjects(demoProjects, "alice") : liveProjects,
+    [isDemoMode, liveProjects],
   );
 
   const filteredMemory = useMemo(() => {
     const phrase = query.trim().toLowerCase();
-    if (!phrase) return demoMemory;
-    return demoMemory.filter((entry) => {
+    if (!phrase) return memoryItems;
+    return memoryItems.filter((entry) => {
       const text =
         `${entry.problem} ${entry.rootCause} ${entry.lesson}`.toLowerCase();
       return text.includes(phrase);
     });
-  }, [query]);
+  }, [memoryItems, query]);
 
-  const handleCreateIncident = () => {
+  const handleCreateIncident = async () => {
+    if (!isDemoMode && activeProject) {
+      try {
+        const token = await currentUser.getIdToken();
+        const response = await fetch(
+          `/api/projects/${activeProject.id}/incidents`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              title: "New engineering incident",
+              severity: "High",
+              summary: "Incident requires investigation and evidence capture.",
+              source: "trace-dashboard",
+            }),
+          },
+        );
+        if (!response.ok) throw new Error("Incident creation failed.");
+        setIncidentNotice("Incident created and persisted in Firestore.");
+        return;
+      } catch (error) {
+        setIncidentNotice(
+          error instanceof Error ? error.message : "Incident creation failed.",
+        );
+        return;
+      }
+    }
+
     const newIncident = createIncident(demoProject, "alice", {
       title: "AI assistant misread workflow logs",
       severity: "High",
@@ -110,6 +295,82 @@ export function TraceDashboard() {
     );
   };
 
+  const handleCreateProject = async () => {
+    try {
+      const token = await currentUser.getIdToken();
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: projectName,
+          repository: projectRepository,
+        }),
+      });
+      if (!response.ok) throw new Error("Project creation failed.");
+      const payload = (await response.json()) as { project: LiveProject };
+      setLiveProjects((projects) => [payload.project, ...projects]);
+      setProjectName("");
+      setProjectRepository("");
+      setIncidentNotice("Project created and persisted in Firestore.");
+    } catch (error) {
+      setIncidentNotice(
+        error instanceof Error ? error.message : "Project creation failed.",
+      );
+    }
+  };
+
+  const handleConnectGitHub = async (projectId: string) => {
+    try {
+      const token = await currentUser.getIdToken();
+      const response = await fetch(
+        `/api/projects/${projectId}/github/connect`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      const payload = (await response.json()) as {
+        authorizationUrl?: string;
+        error?: string;
+      };
+      if (!response.ok || !payload.authorizationUrl)
+        throw new Error(payload.error || "GitHub connection could not start.");
+      window.location.assign(payload.authorizationUrl);
+    } catch (error) {
+      setIncidentNotice(
+        error instanceof Error
+          ? error.message
+          : "GitHub connection could not start.",
+      );
+    }
+  };
+
+  const handleSyncRepository = async (projectId: string) => {
+    try {
+      const token = await currentUser.getIdToken();
+      const response = await fetch(`/api/projects/${projectId}/github/sync`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = (await response.json()) as {
+        workflowRuns?: LiveWorkflowRun[];
+        error?: string;
+      };
+      if (!response.ok)
+        throw new Error(payload.error || "Repository synchronization failed.");
+      setLiveWorkflowRuns(payload.workflowRuns || []);
+      setIncidentNotice("Repository metadata and workflow runs synchronized.");
+    } catch (error) {
+      setIncidentNotice(
+        error instanceof Error
+          ? error.message
+          : "Repository synchronization failed.",
+      );
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <div className="mx-auto flex max-w-[1600px] flex-col lg:flex-row">
@@ -126,12 +387,14 @@ export function TraceDashboard() {
             </div>
           </div>
 
-          <div className="mb-5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
-            <div className="mb-1 flex items-center gap-2 font-semibold">
-              <Sparkles className="h-4 w-4" /> Demo Project
+          {isDemoMode && (
+            <div className="mb-5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+              <div className="mb-1 flex items-center gap-2 font-semibold">
+                <Sparkles className="h-4 w-4" /> Demo Project
+              </div>
+              Synthetic data only — clearly marked for evaluation.
             </div>
-            Synthetic data only — clearly marked for evaluation.
-          </div>
+          )}
 
           <nav className="space-y-1.5">
             {navItems.map(({ key, label, icon: Icon }) => (
@@ -158,12 +421,17 @@ export function TraceDashboard() {
                 Live
               </span>
             </div>
-            <div className="text-base font-semibold">{demoProject.name}</div>
+            <div className="text-base font-semibold">
+              {activeProject?.name || "No project selected"}
+            </div>
             <div className="mt-2 text-sm text-slate-400">
-              {demoProject.repository}
+              {activeProject?.repository ||
+                (liveLoading
+                  ? "Loading authorised projects..."
+                  : "Create or join a project to begin.")}
             </div>
             <div className="mt-4 flex flex-wrap gap-2 text-[10px] text-slate-300">
-              {demoProject.branches.map((branch) => (
+              {(isDemoMode ? demoProject.branches : []).map((branch) => (
                 <span
                   key={branch}
                   className="rounded-full border border-slate-700 bg-slate-800 px-2 py-1"
@@ -176,13 +444,24 @@ export function TraceDashboard() {
         </aside>
 
         <main className="flex-1 bg-slate-950 p-4 lg:p-6">
+          {!isDemoMode && liveError && (
+            <div className="mb-4 rounded-xl border border-red-800 bg-red-950/40 px-3 py-2 text-sm text-red-200">
+              {liveError}
+            </div>
+          )}
+          {!isDemoMode && !liveLoading && !activeProject && (
+            <div className="mb-4 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300">
+              No authorised projects found. Create a project through the live
+              API to begin.
+            </div>
+          )}
           <header className="mb-6 flex flex-col gap-4 rounded-2xl border border-slate-800 bg-slate-900/80 p-4 shadow-xl shadow-slate-950/20 md:flex-row md:items-center md:justify-between">
             <div>
               <div className="text-xs uppercase tracking-[0.22em] text-slate-400">
                 Trace • {activeTab}
               </div>
               <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">
-                {demoProject.name}
+                {activeProject?.name || "Trace"}
               </h1>
             </div>
             <div className="flex items-center gap-3">
@@ -209,21 +488,7 @@ export function TraceDashboard() {
           {activeTab === "overview" && (
             <div className="space-y-6">
               <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                {[
-                  {
-                    label: "Active incidents",
-                    value: demoOverview.activeIncidents,
-                  },
-                  {
-                    label: "Recent failures",
-                    value: demoOverview.failedWorkflows,
-                  },
-                  { label: "CI health", value: demoOverview.ciHealth },
-                  {
-                    label: "Security findings",
-                    value: demoOverview.securityFindings,
-                  },
-                ].map((card) => (
+                {overviewCards.map((card) => (
                   <div
                     key={card.label}
                     className="rounded-2xl border border-slate-800 bg-slate-900 p-4"
@@ -289,6 +554,30 @@ export function TraceDashboard() {
                   {visibleProjects.length} connected
                 </span>
               </div>
+              {!isDemoMode && (
+                <div className="mb-4 grid gap-2 rounded-xl border border-slate-800 bg-slate-950/70 p-3 md:grid-cols-[1fr_1fr_auto]">
+                  <input
+                    value={projectName}
+                    onChange={(event) => setProjectName(event.target.value)}
+                    placeholder="Project name"
+                    className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200"
+                  />
+                  <input
+                    value={projectRepository}
+                    onChange={(event) =>
+                      setProjectRepository(event.target.value)
+                    }
+                    placeholder="owner/repository"
+                    className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200"
+                  />
+                  <button
+                    onClick={handleCreateProject}
+                    className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950"
+                  >
+                    Create project
+                  </button>
+                </div>
+              )}
               <div className="space-y-3">
                 {visibleProjects.map((project) => (
                   <div
@@ -303,7 +592,7 @@ export function TraceDashboard() {
                         {project.repository}
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                       <span
                         className={`rounded-full px-2.5 py-1 text-xs ${statusClasses[project.status] || "bg-slate-700 text-slate-200"}`}
                       >
@@ -312,6 +601,22 @@ export function TraceDashboard() {
                       <span className="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-300">
                         Members: {project.members.length}
                       </span>
+                      {!isDemoMode && (
+                        <>
+                          <button
+                            onClick={() => handleConnectGitHub(project.id)}
+                            className="rounded-lg border border-cyan-400/40 px-2.5 py-1 text-xs text-cyan-300"
+                          >
+                            Connect GitHub
+                          </button>
+                          <button
+                            onClick={() => handleSyncRepository(project.id)}
+                            className="rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300"
+                          >
+                            Sync repository
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -321,7 +626,7 @@ export function TraceDashboard() {
 
           {activeTab === "incidents" && (
             <div className="space-y-4">
-              {demoIncidents.map((incident) => (
+              {incidentItems.map((incident) => (
                 <div
                   key={incident.title}
                   className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
@@ -388,7 +693,7 @@ export function TraceDashboard() {
                 </button>
               </div>
               <div className="space-y-3">
-                {demoCICD.map((run) => (
+                {workflowItems.map((run) => (
                   <div
                     key={`${run.workflow}-${run.timestamp}`}
                     className="grid gap-3 rounded-xl border border-slate-800 bg-slate-950/70 p-4 md:grid-cols-[1.4fr_0.8fr_0.8fr_0.8fr_0.8fr] md:items-center"
@@ -421,7 +726,7 @@ export function TraceDashboard() {
 
           {activeTab === "security" && (
             <div className="space-y-4">
-              {demoSecurity.map((finding) => (
+              {securityItems.map((finding) => (
                 <div
                   key={`${finding.resource}-${finding.description}`}
                   className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
@@ -547,11 +852,11 @@ export function TraceDashboard() {
                 <div className="mt-4 space-y-3 text-sm text-slate-300">
                   <div className="flex items-center gap-3">
                     <GitCommitHorizontal className="h-4 w-4 text-cyan-300" />{" "}
-                    Recent commit: {demoCICD[0].commit}
+                    Recent commit: {workflowItems[0]?.commit || "Unavailable"}
                   </div>
                   <div className="flex items-center gap-3">
                     <Workflow className="h-4 w-4 text-cyan-300" /> Last failed
-                    workflow: {demoCICD[0].workflow}
+                    workflow: {workflowItems[0]?.workflow || "Unavailable"}
                   </div>
                   <div className="flex items-center gap-3">
                     <AlertTriangle className="h-4 w-4 text-cyan-300" />{" "}
@@ -572,19 +877,31 @@ export function TraceDashboard() {
               <div className="mt-4 space-y-3 text-sm text-slate-300">
                 <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/70 p-3">
                   <span>Mode</span>
-                  <span>{demoSettings.mode}</span>
+                  <span>{isDemoMode ? demoSettings.mode : "Live project"}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/70 p-3">
                   <span>Data source</span>
-                  <span>{demoSettings.dataSource}</span>
+                  <span>
+                    {isDemoMode
+                      ? demoSettings.dataSource
+                      : "Firestore and connected integrations"}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/70 p-3">
                   <span>Retention</span>
-                  <span>{demoSettings.retention}</span>
+                  <span>
+                    {isDemoMode
+                      ? demoSettings.retention
+                      : "Configured by deployment"}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/70 p-3">
                   <span>Webhook status</span>
-                  <span>{demoSettings.webhookStatus}</span>
+                  <span>
+                    {isDemoMode
+                      ? demoSettings.webhookStatus
+                      : "Server-side status"}
+                  </span>
                 </div>
               </div>
             </div>

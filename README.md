@@ -100,6 +100,17 @@ A sensible Trace schema includes:
 - `notifications/{notificationId}`
 - `auditLogs/{auditId}`
 
+The live server currently writes project data to these project-scoped paths:
+
+- `projects/{projectId}` with `ownerId`, `memberUids`, and a role-bearing `members` map
+- `projects/{projectId}/incidents/{incidentId}`
+- `projects/{projectId}/engineeringMemory/{memoryId}`
+- `projects/{projectId}/repositories/{repositoryId}`
+- `projects/{projectId}/workflowRuns/{runId}`
+- `projects/{projectId}/auditLogs/{auditId}`
+- `githubConnections/{projectId}` with an encrypted GitHub token, readable only by the Admin SDK
+- `webhookDeliveries/{deliveryId}` for transactional webhook idempotency
+
 Each resource should include explicit ownership or membership metadata such as `ownerId`, `members`, `createdAt`, and `updatedAt`.
 
 ## Firestore security rules
@@ -108,11 +119,12 @@ Rules should default deny and restrict reads or writes to authenticated users wi
 
 ## GitHub integration setup
 
-- Use a secure OAuth or token-based flow on the server.
-- Prefer server-side token storage in Secret Manager.
-- Keep GitHub API calls behind a service abstraction.
-- Respect rate limits, cache stable metadata, and validate responses.
-- Do not expose raw tokens to the browser.
+- Configure `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_OAUTH_STATE_SECRET`, and `GITHUB_TOKEN_ENCRYPTION_KEY`.
+- A project owner or admin starts OAuth from the project view; the callback exchanges the code server-side.
+- GitHub access tokens are AES-GCM encrypted before storage and never returned to the browser.
+- Repository sync persists bounded metadata, recent commits/PRs/issues, and up to 20 workflow runs.
+- Job log reads are timeout-limited and capped at 100,000 bytes.
+- Configure the webhook URL as `/api/github/webhook` with `GITHUB_WEBHOOK_SECRET`.
 
 ## Secret Manager setup
 
@@ -209,18 +221,16 @@ The demo should always be visibly labelled as synthetic to avoid fake integratio
 
 ## Known limitations
 
-- GitHub integration is a service boundary and must be connected to real credentials to function end-to-end.
-- Without valid Firebase credentials, authentication and Firestore access cannot be exercised in a local environment.
+- A real Firebase project, Admin credentials or Cloud Run ADC, GitHub OAuth app, webhook secret, and Gemini key are required to exercise live integrations.
+- Workflow and job records are ingested, but richer cross-run correlation and security scanning remain limited.
 - External data sources may be incomplete, and AI findings should be treated as evidence-backed but not definitive.
 
-## Future improvements
+## Remaining improvements
 
-- real GitHub OAuth and webhook ingestion
 - richer workflow log analysis and commit correlation
 - project-scoped RBAC management UI
-- persistent chat history and incident-driven memory retrieval
+- persistent chat history and deeper incident-driven memory retrieval
 - deeper security scanning and repository risk scoring
-- Cloud Run deployment and Secret Manager wiring for real production use
 
 ## AI Studio usage
 

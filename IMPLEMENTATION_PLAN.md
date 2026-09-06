@@ -42,17 +42,29 @@ The app is no longer the original journal starter, but it is still a vertical-sl
 
 - Type-checking, build validation, and test execution are active in the repo.
 
+### Phase 6 — live persistence and authorization checkpoint
+
+- Firebase Admin ID-token verification is enforced on protected live APIs.
+- Projects, incidents, engineering memory, workflow records, audit logs, and webhook delivery claims persist in Firestore through server-only services.
+- Project ownership and member roles are derived from verified identity and stored project state; client-supplied owner or actor identifiers are ignored.
+- Firestore rules default deny and preserve project ownership and role constraints.
+
+### Phase 7 — GitHub and live-mode checkpoint
+
+- Project-scoped GitHub OAuth uses signed state and encrypted server-side token storage.
+- Repository metadata, commits, pull requests, issues, workflow runs, and bounded job logs have server API boundaries.
+- Webhook signatures are validated against the raw body and delivery claims are transactionally idempotent in Firestore.
+- Live RCA and assistant paths fail explicitly when Gemini or project context is unavailable; demo fallback is gated by explicit demo mode.
+- The existing dashboard now fetches live projects, incidents, memory, and workflow sync results instead of silently using demo data after sign-in.
+- A Cloud Run Dockerfile and Secret Manager deployment references are present.
+
 ## Remaining work for a full production-quality Trace
 
-1. Real Firebase project and Firestore persistence for users/projects/incidents/security and memory
-2. Server-side RBAC enforcement tied to Firestore project roles
-3. Real GitHub OAuth/token flow and repository sync service
-4. Workflow-run and job-log ingestion with bounded retention and redaction
-5. Persisted incident creation/update/resolution with audit logs
-6. Secure AI assistant grounded in selected project context only
-7. Full webhook ingestion with idempotency, repository mapping, and project membership enforcement
-8. Real security review and repository scanning logic
-9. Stronger README claims and deployment documentation for production-only features
+1. Richer workflow/job correlation and persisted job metadata
+2. Project-scoped member management UI and broader audit browsing
+3. More complete security finding ingestion and repository scanning
+4. Persistent assistant conversation history and richer memory retrieval
+5. Firestore emulator integration tests and a live credentialed acceptance run
 
 ## Immediate implementation priority
 
