@@ -22,6 +22,7 @@ import {
   createMemoryFromIncident,
   createProject,
   claimWebhookDelivery,
+  deleteProjectForOwner,
   findProjectByRepository,
   getProject,
   getIncident,
@@ -339,6 +340,32 @@ app.post("/api/projects", requireAuth, async (req: Request, res: Response) => {
     res.status(400).json({ error: "Unable to create the project." });
   }
 });
+
+app.delete(
+  "/api/projects/:projectId",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const user = getAuthenticatedUser(req);
+      const result = await deleteProjectForOwner({
+        projectId: req.params.projectId,
+        actorId: user.uid,
+      });
+      res.json({ success: true, projectId: result.projectId });
+    } catch (error) {
+      const statusCode =
+        error && typeof error === "object" && "statusCode" in error
+          ? Number((error as { statusCode?: number }).statusCode || 500)
+          : 500;
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to delete the project.";
+      console.error("[API Error] DELETE /api/projects/:projectId:", error);
+      res.status(statusCode).json({ error: message });
+    }
+  },
+);
 
 app.get(
   "/api/projects/:projectId/incidents",

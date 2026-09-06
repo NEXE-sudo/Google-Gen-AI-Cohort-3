@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { useEffect } from "react";
 import type { User } from "firebase/auth";
 import {
@@ -30,6 +30,11 @@ import {
   type DemoTab,
 } from "../data/demoData";
 import { createIncident, listVisibleProjects } from "../lib/projectStore";
+import {
+  readSelectedProjectId,
+  resolveSelectedProjectId,
+  writeSelectedProjectId,
+} from "../lib/projectSelection";
 
 const navItems: Array<{
   key: DemoTab;
@@ -127,7 +132,28 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
   const [assistantQuestion, setAssistantQuestion] = useState("");
   const [assistantAnswer, setAssistantAnswer] = useState<string | null>(null);
   const [assistantLoading, setAssistantLoading] = useState(false);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    null,
+  );
+  const requestIdRef = useRef(0);
   const isDemoMode = import.meta.env.VITE_DEMO_MODE === "true";
+
+  useEffect(() => {
+    if (isDemoMode) {
+      setSelectedProjectId(null);
+      writeSelectedProjectId(null);
+      return;
+    }
+
+    const storedProjectId = readSelectedProjectId();
+    setSelectedProjectId((current) => {
+      const next = storedProjectId || current || null;
+      if (next !== current) {
+        writeSelectedProjectId(next);
+      }
+      return next;
+    });
+  }, [isDemoMode]);
 
   useEffect(() => {
     if (isDemoMode) {
@@ -137,40 +163,66 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
 
     let cancelled = false;
     const loadLiveData = async () => {
+      const requestId = ++requestIdRef.current;
+      setLiveLoading(true);
+      setLiveError(null);
       try {
         const token = await currentUser.getIdToken();
         const headers = { Authorization: `Bearer ${token}` };
         const projectsResponse = await fetch("/api/projects", { headers });
-        if (!projectsResponse.ok)
+        if (!projectsResponse.ok) {
           throw new Error("Unable to load authorised projects.");
+        }
+
         const projectsPayload = (await projectsResponse.json()) as {
           projects?: LiveProject[];
         };
         const projects = projectsPayload.projects || [];
+
         if (cancelled) return;
+
         setLiveProjects(projects);
-        const project = projects[0];
-        if (project) {
-          const [incidentsResponse, memoryResponse] = await Promise.all([
-            fetch(`/api/projects/${project.id}/incidents`, { headers }),
-            fetch(`/api/projects/${project.id}/memory`, { headers }),
-          ]);
-          if (!incidentsResponse.ok || !memoryResponse.ok) {
-            throw new Error("Unable to load project intelligence.");
-          }
-          const incidentsPayload = (await incidentsResponse.json()) as {
-            incidents?: LiveIncident[];
-          };
-          const memoryPayload = (await memoryResponse.json()) as {
-            memory?: LiveMemory[];
-          };
-          if (!cancelled) {
-            setLiveIncidents(incidentsPayload.incidents || []);
-            setLiveMemory(memoryPayload.memory || []);
-          }
+        const nextSelection = resolveSelectedProjectId(
+          projects,
+          selectedProjectId,
+        );
+        setSelectedProjectId((current) => {
+          if (current === nextSelection) return current;
+          writeSelectedProjectId(nextSelection);
+          return nextSelection;
+        });
+
+        const project =
+          projects.find((candidate) => candidate.id === nextSelection) ?? null;
+        if (!project) {
+          setLiveIncidents([]);
+          setLiveMemory([]);
+          setLiveWorkflowRuns([]);
+          return;
         }
+
+        const [incidentsResponse, memoryResponse] = await Promise.all([
+          fetch(`/api/projects/${project.id}/incidents`, { headers }),
+          fetch(`/api/projects/${project.id}/memory`, { headers }),
+        ]);
+
+        if (!incidentsResponse.ok || !memoryResponse.ok) {
+          throw new Error("Unable to load project intelligence.");
+        }
+
+        const incidentsPayload = (await incidentsResponse.json()) as {
+          incidents?: LiveIncident[];
+        };
+        const memoryPayload = (await memoryResponse.json()) as {
+          memory?: LiveMemory[];
+        };
+
+        if (requestId !== requestIdRef.current || cancelled) return;
+
+        setLiveIncidents(incidentsPayload.incidents || []);
+        setLiveMemory(memoryPayload.memory || []);
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && requestId === requestIdRef.current) {
           setLiveError(
             error instanceof Error
               ? error.message
@@ -178,16 +230,21 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
           );
         }
       } finally {
-        if (!cancelled) setLiveLoading(false);
+        if (!cancelled && requestId === requestIdRef.current)
+          setLiveLoading(false);
       }
     };
+
     void loadLiveData();
     return () => {
       cancelled = true;
     };
-  }, [currentUser, isDemoMode]);
+  }, [currentUser, isDemoMode, selectedProjectId]);
 
-  const activeProject = isDemoMode ? demoProject : liveProjects[0];
+  const activeProject = isDemoMode
+    ? demoProject
+    : (liveProjects.find((project) => project.id === selectedProjectId) ??
+      null);
   const incidentItems = isDemoMode
     ? demoIncidents
     : liveIncidents.map((incident) => ({
@@ -314,13 +371,62 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
       });
       if (!response.ok) throw new Error("Project creation failed.");
       const payload = (await response.json()) as { project: LiveProject };
-      setLiveProjects((projects) => [payload.project, ...projects]);
+      const createdProject = payload.project;
+      setLiveProjects((projects) => [createdProject, ...projects]);
+      setSelectedProjectId(createdProject.id);
+      writeSelectedProjectId(createdProject.id);
       setProjectName("");
       setProjectRepository("");
       setIncidentNotice("Project created and persisted in Firestore.");
     } catch (error) {
       setIncidentNotice(
         error instanceof Error ? error.message : "Project creation failed.",
+      );
+    }
+  };
+
+  const handleSelectProject = (projectId: string) => {
+    setSelectedProjectId(projectId);
+    writeSelectedProjectId(projectId);
+  };
+
+  const handleDeleteProject = async (project: LiveProject) => {
+    if (isDemoMode) return;
+
+    const confirmed = window.confirm(
+      `Delete project “${project.name}” (${project.repository})? This removes associated incidents, memory, sync data, and GitHub connection data.`,
+    );
+    if (!confirmed) return;
+
+    try {
+      const token = await currentUser.getIdToken();
+      const response = await fetch(`/api/projects/${project.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(payload.error || "Project deletion failed.");
+      }
+
+      const remainingProjects = liveProjects.filter(
+        (candidate) => candidate.id !== project.id,
+      );
+      setLiveProjects(remainingProjects);
+      if (selectedProjectId === project.id) {
+        const nextSelection = resolveSelectedProjectId(remainingProjects, null);
+        setSelectedProjectId(nextSelection);
+        writeSelectedProjectId(nextSelection);
+        setLiveIncidents([]);
+        setLiveMemory([]);
+        setLiveWorkflowRuns([]);
+      }
+      setIncidentNotice(`Project “${project.name}” was deleted.`);
+    } catch (error) {
+      setIncidentNotice(
+        error instanceof Error ? error.message : "Project deletion failed.",
       );
     }
   };
@@ -621,47 +727,76 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                 </div>
               )}
               <div className="space-y-3">
-                {visibleProjects.map((project) => (
-                  <div
-                    key={project.id}
-                    className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-950/70 p-4 md:flex-row md:items-center md:justify-between"
-                  >
-                    <div>
-                      <div className="text-base font-medium text-white">
-                        {project.name}
-                      </div>
-                      <div className="text-sm text-slate-400">
-                        {project.repository}
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <span
-                        className={`rounded-full px-2.5 py-1 text-xs ${statusClasses[project.status] || "bg-slate-700 text-slate-200"}`}
-                      >
-                        {project.status}
-                      </span>
-                      <span className="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-300">
-                        Members: {project.members.length}
-                      </span>
-                      {!isDemoMode && (
-                        <>
-                          <button
-                            onClick={() => handleConnectGitHub(project.id)}
-                            className="rounded-lg border border-cyan-400/40 px-2.5 py-1 text-xs text-cyan-300"
-                          >
-                            Connect GitHub
-                          </button>
-                          <button
-                            onClick={() => handleSyncRepository(project.id)}
-                            className="rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300"
-                          >
-                            Sync repository
-                          </button>
-                        </>
-                      )}
-                    </div>
+                {visibleProjects.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950/50 p-6 text-sm text-slate-400">
+                    No authorised projects yet. Create one above to start
+                    collecting project-specific intelligence.
                   </div>
-                ))}
+                ) : (
+                  visibleProjects.map((project) => (
+                    <div
+                      key={project.id}
+                      className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-950/70 p-4 md:flex-row md:items-center md:justify-between"
+                    >
+                      <div>
+                        <div className="text-base font-medium text-white">
+                          {project.name}
+                        </div>
+                        <div className="text-sm text-slate-400">
+                          {project.repository}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-xs ${statusClasses[project.status] || "bg-slate-700 text-slate-200"}`}
+                        >
+                          {project.status}
+                        </span>
+                        <span className="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-300">
+                          Members: {project.members.length}
+                        </span>
+                        {!isDemoMode && (
+                          <>
+                            <button
+                              onClick={() => handleSelectProject(project.id)}
+                              className={`rounded-lg px-2.5 py-1 text-xs ${
+                                selectedProjectId === project.id
+                                  ? "border border-cyan-400/60 bg-cyan-500/10 text-cyan-200"
+                                  : "border border-slate-700 text-slate-300"
+                              }`}
+                            >
+                              {selectedProjectId === project.id
+                                ? "Selected"
+                                : "Select"}
+                            </button>
+                            <button
+                              onClick={() => handleConnectGitHub(project.id)}
+                              className="rounded-lg border border-cyan-400/40 px-2.5 py-1 text-xs text-cyan-300"
+                            >
+                              Connect GitHub
+                            </button>
+                            <button
+                              onClick={() => handleSyncRepository(project.id)}
+                              className="rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300"
+                            >
+                              Sync repository
+                            </button>
+                            {project.ownerId === currentUser.uid && (
+                              <button
+                                onClick={() =>
+                                  void handleDeleteProject(project)
+                                }
+                                className="rounded-lg border border-red-500/40 px-2.5 py-1 text-xs text-red-300"
+                              >
+                                Delete project
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           )}

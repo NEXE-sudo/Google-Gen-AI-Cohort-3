@@ -332,6 +332,78 @@ export async function writeAuditLog(args: {
   });
 }
 
+export async function deleteProjectForOwner(args: {
+  projectId: string;
+  actorId: string;
+}) {
+  const project = await getProject(args.projectId);
+  if (!project) {
+    throw Object.assign(new Error("Project not found."), { statusCode: 404 });
+  }
+  if (project.ownerId !== args.actorId) {
+    throw Object.assign(new Error("Only the project owner may delete it."), {
+      statusCode: 403,
+    });
+  }
+
+  const projectReference = projectCollection().doc(args.projectId);
+
+  const subcollections = [
+    "incidents",
+    "engineeringMemory",
+    "auditLogs",
+    "repositories",
+    "workflowRuns",
+  ];
+
+  const referencesToDelete: FirebaseFirestore.DocumentReference[] = [
+    projectReference,
+  ];
+  for (const collectionName of subcollections) {
+    const snapshot = await projectReference.collection(collectionName).get();
+    for (const document of snapshot.docs) {
+      referencesToDelete.push(document.ref);
+    }
+  }
+
+  const githubConnectionSnapshot = await getFirebaseAdminDb()
+    .collection("githubConnections")
+    .where("projectId", "==", args.projectId)
+    .get();
+  for (const document of githubConnectionSnapshot.docs) {
+    referencesToDelete.push(document.ref);
+  }
+
+  const githubOAuthStateSnapshot = await getFirebaseAdminDb()
+    .collection("githubOAuthStates")
+    .where("projectId", "==", args.projectId)
+    .get();
+  for (const document of githubOAuthStateSnapshot.docs) {
+    referencesToDelete.push(document.ref);
+  }
+
+  const db = getFirebaseAdminDb();
+  for (let index = 0; index < referencesToDelete.length; index += 400) {
+    const batch = db.batch();
+    for (const reference of referencesToDelete.slice(index, index + 400)) {
+      batch.delete(reference);
+    }
+    await batch.commit();
+  }
+
+  await db.collection("auditLogs").add({
+    projectId: args.projectId,
+    actorId: args.actorId,
+    action: "PROJECT_DELETED",
+    targetType: "project",
+    targetId: args.projectId,
+    result: "success",
+    createdAt: now(),
+  });
+
+  return { success: true, projectId: args.projectId };
+}
+
 export async function saveRepositorySync(args: {
   projectId: string;
   repository: unknown;

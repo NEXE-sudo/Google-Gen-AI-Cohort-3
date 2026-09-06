@@ -5,6 +5,11 @@ import {
   resolveProjectRole,
   type ProjectMemberRole,
 } from "./projects";
+import {
+  readSelectedProjectId,
+  resolveSelectedProjectId,
+  writeSelectedProjectId,
+} from "./projectSelection";
 
 describe("project access model", () => {
   const project = {
@@ -48,5 +53,41 @@ describe("project access model", () => {
     ).toBe(true);
     expect(canManageProjectIntegration(project, "marcus")).toBe(false);
     expect(canManageProjectIntegration(project, "priya")).toBe(false);
+  });
+
+  it("allows deletion only for the project owner", () => {
+    expect(canAccessProject(project, "alice", "delete")).toBe(true);
+    expect(canAccessProject(project, "marcus", "delete")).toBe(false);
+    expect(canAccessProject(project, "priya", "delete")).toBe(false);
+  });
+
+  it("keeps a valid persisted project selection and requires an explicit choice when nothing is selected", () => {
+    const projects = [
+      { id: "proj_a", name: "A" },
+      { id: "proj_b", name: "B" },
+    ] as any[];
+
+    expect(resolveSelectedProjectId(projects, "proj_b")).toBe("proj_b");
+    expect(resolveSelectedProjectId(projects, "missing")).toBeNull();
+    expect(resolveSelectedProjectId(projects, null)).toBeNull();
+    expect(resolveSelectedProjectId([], "proj_a")).toBeNull();
+  });
+
+  it("persists and reads selected project IDs with a namespaced localStorage key", () => {
+    const storage = new Map<string, string>();
+    const fakeStorage = {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        storage.set(key, value);
+      },
+      removeItem: (key: string) => {
+        storage.delete(key);
+      },
+    } as Storage;
+
+    writeSelectedProjectId("proj_b", fakeStorage);
+    expect(readSelectedProjectId(fakeStorage)).toBe("proj_b");
+    writeSelectedProjectId(null, fakeStorage);
+    expect(readSelectedProjectId(fakeStorage)).toBeNull();
   });
 });
