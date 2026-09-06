@@ -134,9 +134,9 @@ type LiveWorkflowJob = {
   name: string;
   status: string;
   conclusion: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-  html_url: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  url: string | null;
 };
 
 type FailureAnalysis = {
@@ -639,9 +639,8 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
       return;
     }
 
-    const workflow = selectProblematicWorkflowRun<LiveWorkflowRun>(
-      liveWorkflowRuns,
-    );
+    const workflow =
+      selectProblematicWorkflowRun<LiveWorkflowRun>(liveWorkflowRuns);
     if (!workflow) {
       setRcaError("No failed workflow run is available for analysis.");
       return;
@@ -664,14 +663,27 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
         error?: string;
       };
       if (!jobsResponse.ok) {
-        throw new Error(jobsPayload.error || "Failed job could not be retrieved.");
+        throw new Error(
+          jobsPayload.error || "Failed job could not be retrieved.",
+        );
       }
 
       const failedJob = selectFailedWorkflowJob<LiveWorkflowJob>(
         jobsPayload.jobs || [],
       );
       if (!failedJob) {
-        throw new Error("No failed job is available for this workflow run.");
+        const jobs = jobsPayload.jobs || [];
+        if (!jobs.length) {
+          throw new Error(
+            `GitHub returned no jobs for workflow run ${workflow.id}.`,
+          );
+        }
+        const outcomes = jobs
+          .map((job) => `${job.name}: ${job.conclusion || job.status}`)
+          .join(", ");
+        throw new Error(
+          `GitHub returned jobs, but none has a failure conclusion (${outcomes}).`,
+        );
       }
 
       setRcaStage("Reading failure logs...");
@@ -684,7 +696,9 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
         error?: string;
       };
       if (!logsResponse.ok || typeof logsPayload.logs !== "string") {
-        throw new Error(logsPayload.error || "Failure logs could not be retrieved.");
+        throw new Error(
+          logsPayload.error || "Failure logs could not be retrieved.",
+        );
       }
 
       setRcaStage("Analysing with Gemini...");
@@ -704,7 +718,9 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
           recentCommits: workflow.commitSha ? [workflow.commitSha] : [],
         }),
       });
-      const analysisPayload = (await analysisResponse.json().catch(() => ({}))) as {
+      const analysisPayload = (await analysisResponse
+        .json()
+        .catch(() => ({}))) as {
         data?: FailureAnalysis;
         error?: string;
       };
@@ -1261,10 +1277,14 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                         {rcaState.workflow.name} • {rcaState.job.name}
                       </div>
                       <div className="text-xs text-slate-400">
-                        GitHub run {rcaState.workflowRunId} • {rcaState.workflow.branch || "unknown"} • {rcaState.workflow.commitSha.slice(0, 8) || "unknown"}
+                        GitHub run {rcaState.workflowRunId} •{" "}
+                        {rcaState.workflow.branch || "unknown"} •{" "}
+                        {rcaState.workflow.commitSha.slice(0, 8) || "unknown"}
                       </div>
                     </div>
-                    <span className={`rounded-full px-2.5 py-1 text-xs ${statusClasses[rcaState.analysis.confidence]}`}>
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-xs ${statusClasses[rcaState.analysis.confidence]}`}
+                    >
                       Confidence: {rcaState.analysis.confidence}
                     </span>
                   </div>
@@ -1285,10 +1305,13 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                         Evidence
                       </div>
                       <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-300">
-                        {rcaState.analysis.evidence.length ?
+                        {rcaState.analysis.evidence.length ? (
                           rcaState.analysis.evidence.map((evidence) => (
                             <li key={evidence}>{evidence}</li>
-                          )) : <li>No matching evidence returned.</li>}
+                          ))
+                        ) : (
+                          <li>No matching evidence returned.</li>
+                        )}
                       </ul>
                     </div>
                     <div>
@@ -1296,28 +1319,39 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                         Recommended actions
                       </div>
                       <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-300">
-                        {rcaState.analysis.recommendedActions.length ?
+                        {rcaState.analysis.recommendedActions.length ? (
                           rcaState.analysis.recommendedActions.map((action) => (
                             <li key={action}>{action}</li>
-                          )) : <li>No recommended actions returned.</li>}
+                          ))
+                        ) : (
+                          <li>No recommended actions returned.</li>
+                        )}
                       </ul>
                     </div>
                   </div>
                   <div className="grid gap-4 text-sm text-slate-300 md:grid-cols-3">
                     <div>
                       <span className="text-slate-500">Components:</span>{" "}
-                      {rcaState.analysis.affectedComponents.join(", ") || "Unavailable"}
+                      {rcaState.analysis.affectedComponents.join(", ") ||
+                        "Unavailable"}
                     </div>
                     <div>
                       <span className="text-slate-500">Commits:</span>{" "}
-                      {rcaState.analysis.relatedCommits.join(", ") || "Unavailable"}
+                      {rcaState.analysis.relatedCommits.join(", ") ||
+                        "Unavailable"}
                     </div>
                     <div>
                       <span className="text-slate-500">Pull requests:</span>{" "}
-                      {rcaState.analysis.relatedPullRequests.join(", ") || "Unavailable"}
+                      {rcaState.analysis.relatedPullRequests.join(", ") ||
+                        "Unavailable"}
                     </div>
                   </div>
-                  <details open={rcaLogsOpen} onToggle={(event) => setRcaLogsOpen(event.currentTarget.open)}>
+                  <details
+                    open={rcaLogsOpen}
+                    onToggle={(event) =>
+                      setRcaLogsOpen(event.currentTarget.open)
+                    }
+                  >
                     <summary className="cursor-pointer text-xs uppercase tracking-[0.2em] text-slate-400">
                       GitHub job logs
                     </summary>
@@ -1330,7 +1364,9 @@ export function TraceDashboard({ currentUser }: { currentUser: User }) {
                     disabled={incidentCreating}
                     className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950 disabled:opacity-50"
                   >
-                    {incidentCreating ? "Creating incident..." : "Create incident"}
+                    {incidentCreating
+                      ? "Creating incident..."
+                      : "Create incident"}
                   </button>
                 </div>
               )}

@@ -29,7 +29,18 @@ describe("workflow analysis selection", () => {
   });
 
   it("returns null when no failed workflow or job exists", () => {
-    expect(selectProblematicWorkflowRun([{ id: 1, conclusion: "success" }])).toBeNull();
+    expect(
+      selectProblematicWorkflowRun([{ id: 1, conclusion: "success" }]),
+    ).toBeNull();
     expect(selectFailedWorkflowJob([{ id: 2, conclusion: null }])).toBeNull();
+  });
+
+  it("does not select successful or skipped jobs as failures", () => {
+    expect(
+      selectFailedWorkflowJob([
+        { id: 1, conclusion: "success" },
+        { id: 2, conclusion: "skipped" },
+      ]),
+    ).toBeNull();
   });
 });

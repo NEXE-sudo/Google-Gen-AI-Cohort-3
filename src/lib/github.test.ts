@@ -1,11 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   encryptGitHubToken,
   decryptGitHubToken,
   createGitHubOAuthState,
   verifyGitHubOAuthState,
 } from "../server/githubConnections";
-import { normalizeWorkflowRun, parseGitHubRepository } from "./github";
+import {
+  fetchGitHubWorkflowJobs,
+  normalizeWorkflowJob,
+  normalizeWorkflowRun,
+  parseGitHubRepository,
+} from "./github";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("GitHub integration boundaries", () => {
   it("accepts owner/name repository identifiers and rejects arbitrary URLs", () => {
@@ -47,6 +56,64 @@ describe("GitHub integration boundaries", () => {
     });
     expect(normalized).not.toHaveProperty("completedAt");
     expect(normalizeWorkflowRun({ id: "not-a-run" })).toBeNull();
+  });
+
+  it("reads and normalizes the GitHub workflow jobs wrapper without dropping failure", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          jobs: [
+            {
+              id: 123,
+              name: "Trace CI",
+              status: "completed",
+              conclusion: "failure",
+              started_at: "2026-09-06T10:00:00.000Z",
+              completed_at: "2026-09-06T10:01:00.000Z",
+              html_url: "https://github.com/acme/app/actions/runs/1/job/123",
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      fetchGitHubWorkflowJobs("server-token", "acme", "app", 1),
+    ).resolves.toEqual([
+      {
+        id: 123,
+        name: "Trace CI",
+        status: "completed",
+        conclusion: "failure",
+        startedAt: "2026-09-06T10:00:00.000Z",
+        completedAt: "2026-09-06T10:01:00.000Z",
+        url: "https://github.com/acme/app/actions/runs/1/job/123",
+      },
+    ]);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://api.github.com/repos/acme/app/actions/runs/1/jobs?per_page=20",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer server-token",
+        }),
+      }),
+    );
+  });
+
+  it("rejects malformed jobs and preserves supported failure conclusions", () => {
+    expect(
+      normalizeWorkflowJob({
+        id: 123,
+        name: "Trace CI",
+        status: "completed",
+        conclusion: "failure",
+        started_at: "2026-09-06T10:00:00.000Z",
+        completed_at: "2026-09-06T10:01:00.000Z",
+        html_url: "https://github.com/example/job/123",
+      }),
+    ).toMatchObject({ id: 123, conclusion: "failure" });
+    expect(normalizeWorkflowJob({ id: "invalid" })).toBeNull();
   });
 
   it("round-trips encrypted GitHub tokens without exposing plaintext", () => {

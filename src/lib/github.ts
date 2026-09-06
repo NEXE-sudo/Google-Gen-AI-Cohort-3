@@ -108,6 +108,49 @@ export type GitHubWorkflowJob = {
   html_url: string;
 };
 
+export type PersistedWorkflowJob = {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  url: string | null;
+};
+
+export function normalizeWorkflowJob(
+  value: Record<string, unknown>,
+): PersistedWorkflowJob | null {
+  const id = Number(value.id);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+
+  return {
+    id,
+    name: typeof value.name === "string" ? value.name : "Unnamed job",
+    status: typeof value.status === "string" ? value.status : "unknown",
+    conclusion:
+      typeof value.conclusion === "string" ? value.conclusion : null,
+    startedAt:
+      typeof value.started_at === "string"
+        ? value.started_at
+        : typeof value.startedAt === "string"
+          ? value.startedAt
+          : null,
+    completedAt:
+      typeof value.completed_at === "string"
+        ? value.completed_at
+        : typeof value.completedAt === "string"
+          ? value.completedAt
+          : null,
+    url:
+      typeof value.html_url === "string"
+        ? value.html_url
+        : typeof value.url === "string"
+          ? value.url
+          : null,
+  };
+}
+
 const GITHUB_TIMEOUT_MS = 15_000;
 const MAX_JSON_BYTES = 1_000_000;
 const MAX_COLLECTION_ITEMS = 100;
@@ -263,7 +306,12 @@ export async function fetchGitHubWorkflowJobs(
     `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/jobs?per_page=20`,
     token,
   );
-  return (payload.jobs || []).slice(0, MAX_COLLECTION_ITEMS);
+  return (payload.jobs || [])
+    .slice(0, MAX_COLLECTION_ITEMS)
+    .map((job) =>
+      normalizeWorkflowJob(job as unknown as Record<string, unknown>),
+    )
+    .filter((job): job is PersistedWorkflowJob => job !== null);
 }
 
 export async function fetchGitHubJobLogs(
